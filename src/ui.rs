@@ -1,5 +1,5 @@
 //! UI module for Process Monitor
-//! Contains Dioxus components with Tailwind CSS
+//! Contains Dioxus components with custom CSS (offline)
 
 use dioxus::prelude::*;
 use crate::process::{ProcessInfo, get_processes, get_system_stats, kill_process, open_file_location, format_uptime};
@@ -52,17 +52,17 @@ pub fn ProcessRow(
     
     // CPU usage color based on value
     let cpu_class = if process.cpu_usage > 50.0 {
-        "text-red-400"
+        "cpu-high"
     } else if process.cpu_usage > 25.0 {
-        "text-yellow-400"
+        "cpu-medium"
     } else {
-        "text-green-400"
+        "cpu-low"
     };
     
     let row_class = if is_selected {
-        "border-l-4 border-red-500 bg-red-500/20 hover:bg-red-500/30 cursor-pointer transition-colors"
+        "process-row selected"
     } else {
-        "hover:bg-cyan-500/10 cursor-pointer transition-colors border-b border-white/5"
+        "process-row"
     };
 
     rsx! {
@@ -75,22 +75,22 @@ pub fn ProcessRow(
                 let coords = e.client_coordinates();
                 on_context_menu.call((coords.x as i32, coords.y as i32, pid, exe_path_for_context.clone()));
             },
-            td { class: "px-4 py-3 font-mono text-yellow-400 w-20", "{process.pid}" }
-            td { class: "px-4 py-3 font-medium", "{process.name}" }
-            td { class: "px-4 py-3 font-mono {cpu_class} w-20 text-center", "{process.cpu_usage:.1}%" }
-            td { class: "px-4 py-3 font-mono text-purple-400 w-20 text-center", "{process.thread_count}" }
-            td { class: "px-4 py-3 w-44",
-                div { class: "flex items-center gap-2",
-                    div { class: "flex-1 h-2 bg-white/10 rounded overflow-hidden",
+            td { class: "cell cell-pid", "{process.pid}" }
+            td { class: "cell cell-name", "{process.name}" }
+            td { class: "cell cell-cpu {cpu_class}", "{process.cpu_usage:.1}%" }
+            td { class: "cell cell-threads", "{process.thread_count}" }
+            td { class: "cell cell-memory",
+                div { class: "memory-bar-container",
+                    div { class: "memory-bar-bg",
                         div { 
-                            class: "h-full bg-gradient-to-r from-green-400 via-cyan-400 to-red-500 rounded transition-all duration-300",
+                            class: "memory-bar-fill",
                             style: "width: {memory_percent}%",
                         }
                     }
-                    span { class: "font-mono text-green-400 text-xs min-w-[70px] text-right", "{process.memory_mb:.1} MB" }
+                    span { class: "memory-text", "{process.memory_mb:.1} MB" }
                 }
             }
-            td { class: "px-4 py-3 text-xs text-gray-500 max-w-[200px] truncate hover:text-gray-400", title: "{exe_path}", "{exe_filename}" }
+            td { class: "cell cell-path", title: "{exe_path}", "{exe_filename}" }
         }
     }
 }
@@ -214,8 +214,6 @@ pub fn App() -> Element {
     };
 
     rsx! {
-        // Tailwind CDN
-        script { src: "https://cdn.tailwindcss.com" }
         style { {CUSTOM_STYLES} }
 
         // Main container with keyboard handler
@@ -223,21 +221,21 @@ pub fn App() -> Element {
             tabindex: "0",
             onkeydown: handle_keydown,
             onclick: move |_| context_menu.set(ContextMenuState::default()),
-            class: "h-screen flex flex-col outline-none",
+            class: "main-container",
 
             // Custom title bar for borderless window
-            div { class: "flex justify-between items-center h-9 bg-gradient-to-r from-slate-950 to-slate-900 border-b border-cyan-500/20 select-none flex-shrink-0",
+            div { class: "title-bar",
                 div { 
-                    class: "flex-1 h-full flex items-center pl-3 cursor-move",
+                    class: "title-bar-drag",
                     onmousedown: move |_| {
                         let window = dioxus::desktop::window();
                         let _ = window.drag_window();
                     },
-                    span { class: "text-sm font-medium text-cyan-400", "🖥️ Process Monitor" }
+                    span { class: "title-text", "🖥️ Process Monitor" }
                 }
-                div { class: "flex h-full",
+                div { class: "title-bar-buttons",
                     button {
-                        class: "w-12 h-full border-none bg-transparent text-gray-400 text-xs cursor-pointer transition-all hover:bg-white/10 hover:text-white",
+                        class: "title-btn",
                         onclick: move |_| {
                             let window = dioxus::desktop::window();
                             window.set_minimized(true);
@@ -245,7 +243,7 @@ pub fn App() -> Element {
                         "─"
                     }
                     button {
-                        class: "w-12 h-full border-none bg-transparent text-gray-400 text-xs cursor-pointer transition-all hover:bg-white/10 hover:text-white",
+                        class: "title-btn",
                         onclick: move |_| {
                             let window = dioxus::desktop::window();
                             window.set_maximized(!window.is_maximized());
@@ -253,7 +251,7 @@ pub fn App() -> Element {
                         "□"
                     }
                     button {
-                        class: "w-12 h-full border-none bg-transparent text-gray-400 text-xs cursor-pointer transition-all hover:bg-red-600 hover:text-white",
+                        class: "title-btn title-btn-close",
                         onclick: move |_| {
                             let window = dioxus::desktop::window();
                             window.close();
@@ -264,72 +262,72 @@ pub fn App() -> Element {
             }
 
             // System Stats Bar
-            div { class: "bg-gradient-to-r from-slate-900/80 to-slate-800/80 border-b border-cyan-500/10 px-5 py-2 flex items-center gap-6 text-xs flex-shrink-0",
+            div { class: "stats-bar",
                 // CPU Usage
-                div { class: "flex items-center gap-2",
-                    span { class: "text-gray-500", "CPU" }
-                    div { class: "w-24 h-2 bg-white/10 rounded overflow-hidden",
+                div { class: "stat-item",
+                    span { class: "stat-label", "CPU" }
+                    div { class: "stat-bar",
                         div { 
-                            class: "h-full bg-gradient-to-r from-cyan-400 to-cyan-600 transition-all duration-500",
+                            class: "stat-bar-fill stat-bar-cpu",
                             style: "width: {stats.cpu_usage}%",
                         }
                     }
-                    span { class: "font-mono text-cyan-400 min-w-[40px]", "{stats.cpu_usage:.1}%" }
+                    span { class: "stat-value stat-value-cyan", "{stats.cpu_usage:.1}%" }
                 }
                 
                 // Memory Usage
-                div { class: "flex items-center gap-2",
-                    span { class: "text-gray-500", "RAM" }
-                    div { class: "w-24 h-2 bg-white/10 rounded overflow-hidden",
+                div { class: "stat-item",
+                    span { class: "stat-label", "RAM" }
+                    div { class: "stat-bar",
                         div { 
-                            class: "h-full bg-gradient-to-r from-purple-400 to-purple-600 transition-all duration-500",
+                            class: "stat-bar-fill stat-bar-ram",
                             style: "width: {stats.memory_percent}%",
                         }
                     }
-                    span { class: "font-mono text-purple-400 min-w-[100px]", "{stats.used_memory_gb:.1}/{stats.total_memory_gb:.1} GB" }
+                    span { class: "stat-value stat-value-purple", "{stats.used_memory_gb:.1}/{stats.total_memory_gb:.1} GB" }
                 }
                 
                 // Uptime
-                div { class: "flex items-center gap-2",
-                    span { class: "text-gray-500", "Uptime" }
-                    span { class: "font-mono text-green-400", "{format_uptime(stats.uptime_seconds)}" }
+                div { class: "stat-item",
+                    span { class: "stat-label", "Uptime" }
+                    span { class: "stat-value stat-value-green", "{format_uptime(stats.uptime_seconds)}" }
                 }
                 
                 // Process count
-                div { class: "flex items-center gap-2 ml-auto",
-                    span { class: "text-gray-500", "Total Processes" }
-                    span { class: "font-mono text-yellow-400", "{stats.process_count}" }
+                div { class: "stat-item stat-item-right",
+                    span { class: "stat-label", "Total Processes" }
+                    span { class: "stat-value stat-value-yellow", "{stats.process_count}" }
                 }
             }
 
-            div { class: "max-w-6xl mx-auto p-5 flex-1 overflow-hidden flex flex-col",
+            div { class: "content-area",
                 // Header
-                div { class: "text-center mb-4 p-4 bg-white/5 rounded-xl backdrop-blur-sm flex-shrink-0",
-                    h1 { class: "text-2xl mb-2 text-cyan-400 font-bold", "🖥️ Windows Process Monitor" }
-                    div { class: "flex justify-center gap-8 text-sm text-gray-400",
+                div { class: "header-box",
+                    h1 { class: "header-title", "🖥️ Windows Process Monitor" }
+                    div { class: "header-stats",
                         span { "Showing: {process_count} processes" }
                         span { "Memory: {total_memory:.1} MB" }
-                        span { class: "text-gray-600 text-xs", "F5: Refresh | Del: Kill | Esc: Close menu" }
+                        span { class: "header-shortcuts", "F5: Refresh | Del: Kill | Esc: Close menu" }
                     }
                     if !status_message.read().is_empty() {
-                        div { class: "mt-3 py-2 px-4 bg-cyan-500/20 rounded-md text-sm text-cyan-400 inline-block", "{status_message}" }
+                        div { class: "status-message", "{status_message}" }
                     }
                 }
 
                 // Controls
-                div { class: "flex gap-4 mb-4 items-center flex-wrap flex-shrink-0",
+                div { class: "controls",
                     input {
-                        class: "flex-1 min-w-[200px] py-3 px-4 border-none rounded-lg bg-white/10 text-white text-sm outline-none transition-colors focus:bg-white/15 placeholder:text-gray-500",
+                        class: "search-input",
                         r#type: "text",
                         placeholder: "Search by name, PID, or path... (Ctrl+F)",
                         value: "{search_query}",
                         oninput: move |e| search_query.set(e.value().clone()),
                     }
                     
-                    label { class: "flex items-center gap-2 text-gray-400 text-sm cursor-pointer select-none",
+                    label { class: "checkbox-label",
                         input {
                             r#type: "checkbox",
-                            class: "w-4 h-4 cursor-pointer accent-cyan-400",
+                            class: "checkbox",
                             checked: *auto_refresh.read(),
                             onchange: move |e| auto_refresh.set(e.checked()),
                         }
@@ -337,7 +335,7 @@ pub fn App() -> Element {
                     }
 
                     button {
-                        class: "py-3 px-6 border-none rounded-lg text-sm font-semibold cursor-pointer transition-all bg-gradient-to-br from-cyan-400 to-cyan-600 text-white hover:-translate-y-0.5 hover:shadow-lg hover:shadow-cyan-500/40 active:translate-y-0",
+                        class: "btn btn-primary",
                         onclick: move |_| {
                             processes.set(get_processes());
                             system_stats.set(get_system_stats());
@@ -346,7 +344,7 @@ pub fn App() -> Element {
                     }
 
                     button {
-                        class: "py-3 px-6 border-none rounded-lg text-sm font-semibold cursor-pointer transition-all bg-gradient-to-br from-red-500 to-red-700 text-white hover:-translate-y-0.5 hover:shadow-lg hover:shadow-red-500/40 active:translate-y-0 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0 disabled:hover:shadow-none",
+                        class: "btn btn-danger",
                         disabled: selected_pid.read().is_none(),
                         onclick: move |_| {
                             let pid_to_kill = *selected_pid.read();
@@ -369,12 +367,12 @@ pub fn App() -> Element {
                 }
 
                 // Process table
-                div { class: "bg-white/5 rounded-xl flex-1 overflow-y-auto overflow-x-hidden min-h-0",
-                    table { class: "w-full border-collapse",
-                        thead { class: "sticky top-0 bg-cyan-500/20 backdrop-blur-sm z-10",
+                div { class: "table-container",
+                    table { class: "process-table",
+                        thead { class: "table-header",
                             tr {
                                 th { 
-                                    class: "px-4 py-3 text-left font-semibold text-cyan-400 border-b-2 border-cyan-500/30 cursor-pointer select-none transition-colors hover:bg-cyan-500/30 text-sm",
+                                    class: "th sortable",
                                     onclick: move |_| {
                                         if *sort_column.read() == SortColumn::Pid {
                                             let new_order = if *sort_order.read() == SortOrder::Ascending { SortOrder::Descending } else { SortOrder::Ascending };
@@ -387,7 +385,7 @@ pub fn App() -> Element {
                                     "PID{sort_indicator(SortColumn::Pid)}" 
                                 }
                                 th { 
-                                    class: "px-4 py-3 text-left font-semibold text-cyan-400 border-b-2 border-cyan-500/30 cursor-pointer select-none transition-colors hover:bg-cyan-500/30 text-sm",
+                                    class: "th sortable",
                                     onclick: move |_| {
                                         if *sort_column.read() == SortColumn::Name {
                                             let new_order = if *sort_order.read() == SortOrder::Ascending { SortOrder::Descending } else { SortOrder::Ascending };
@@ -400,7 +398,7 @@ pub fn App() -> Element {
                                     "Name{sort_indicator(SortColumn::Name)}" 
                                 }
                                 th { 
-                                    class: "px-4 py-3 text-left font-semibold text-cyan-400 border-b-2 border-cyan-500/30 cursor-pointer select-none transition-colors hover:bg-cyan-500/30 text-sm",
+                                    class: "th sortable",
                                     onclick: move |_| {
                                         if *sort_column.read() == SortColumn::Cpu {
                                             let new_order = if *sort_order.read() == SortOrder::Ascending { SortOrder::Descending } else { SortOrder::Ascending };
@@ -413,7 +411,7 @@ pub fn App() -> Element {
                                     "CPU{sort_indicator(SortColumn::Cpu)}" 
                                 }
                                 th { 
-                                    class: "px-4 py-3 text-left font-semibold text-cyan-400 border-b-2 border-cyan-500/30 cursor-pointer select-none transition-colors hover:bg-cyan-500/30 text-sm",
+                                    class: "th sortable",
                                     onclick: move |_| {
                                         if *sort_column.read() == SortColumn::Threads {
                                             let new_order = if *sort_order.read() == SortOrder::Ascending { SortOrder::Descending } else { SortOrder::Ascending };
@@ -426,7 +424,7 @@ pub fn App() -> Element {
                                     "Threads{sort_indicator(SortColumn::Threads)}" 
                                 }
                                 th { 
-                                    class: "px-4 py-3 text-left font-semibold text-cyan-400 border-b-2 border-cyan-500/30 cursor-pointer select-none transition-colors hover:bg-cyan-500/30 text-sm",
+                                    class: "th sortable",
                                     onclick: move |_| {
                                         if *sort_column.read() == SortColumn::Memory {
                                             let new_order = if *sort_order.read() == SortOrder::Ascending { SortOrder::Descending } else { SortOrder::Ascending };
@@ -438,7 +436,7 @@ pub fn App() -> Element {
                                     },
                                     "Memory{sort_indicator(SortColumn::Memory)}" 
                                 }
-                                th { class: "px-4 py-3 text-left font-semibold text-cyan-400 border-b-2 border-cyan-500/30 text-sm", "Path" }
+                                th { class: "th", "Path" }
                             }
                         }
                         tbody {
@@ -475,13 +473,13 @@ pub fn App() -> Element {
             // Context Menu
             if ctx_menu.visible {
                 div {
-                    class: "fixed bg-slate-800 border border-cyan-500/30 rounded-lg shadow-2xl shadow-black/50 py-1 min-w-[180px] z-50",
+                    class: "context-menu",
                     style: "left: {ctx_menu.x}px; top: {ctx_menu.y}px;",
                     onclick: move |e| e.stop_propagation(),
                     
                     // Kill Process
                     button {
-                        class: "w-full px-4 py-2 text-left text-sm text-red-400 hover:bg-red-500/20 flex items-center gap-2 transition-colors",
+                        class: "context-menu-item context-menu-item-danger",
                         onclick: move |_| {
                             if let Some(pid) = ctx_menu.pid {
                                 if kill_process(pid) {
@@ -503,11 +501,11 @@ pub fn App() -> Element {
                     }
                     
                     // Separator
-                    div { class: "h-px bg-cyan-500/20 my-1" }
+                    div { class: "context-menu-separator" }
                     
                     // Open File Location
                     button {
-                        class: "w-full px-4 py-2 text-left text-sm text-gray-300 hover:bg-cyan-500/20 flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed",
+                        class: "context-menu-item",
                         disabled: ctx_menu.exe_path.is_empty(),
                         onclick: {
                             let path = ctx_menu.exe_path.clone();
@@ -522,7 +520,7 @@ pub fn App() -> Element {
                     
                     // Copy PID
                     button {
-                        class: "w-full px-4 py-2 text-left text-sm text-gray-300 hover:bg-cyan-500/20 flex items-center gap-2 transition-colors",
+                        class: "context-menu-item",
                         onclick: move |_| {
                             if let Some(pid) = ctx_menu.pid {
                                 let eval = document::eval(&format!(
@@ -544,7 +542,7 @@ pub fn App() -> Element {
                     
                     // Copy Path
                     button {
-                        class: "w-full px-4 py-2 text-left text-sm text-gray-300 hover:bg-cyan-500/20 flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed",
+                        class: "context-menu-item",
                         disabled: ctx_menu.exe_path.is_empty(),
                         onclick: {
                             let path = ctx_menu.exe_path.clone();
@@ -567,11 +565,11 @@ pub fn App() -> Element {
                     }
                     
                     // Separator
-                    div { class: "h-px bg-cyan-500/20 my-1" }
+                    div { class: "context-menu-separator" }
                     
                     // Refresh
                     button {
-                        class: "w-full px-4 py-2 text-left text-sm text-gray-300 hover:bg-cyan-500/20 flex items-center gap-2 transition-colors",
+                        class: "context-menu-item",
                         onclick: move |_| {
                             processes.set(get_processes());
                             system_stats.set(get_system_stats());
@@ -586,8 +584,9 @@ pub fn App() -> Element {
     }
 }
 
-/// Minimal custom styles (only for things Tailwind can't handle easily)
+/// Complete offline CSS styles
 pub const CUSTOM_STYLES: &str = r#"
+    /* Reset & Base */
     * {
         margin: 0;
         padding: 0;
@@ -602,21 +601,417 @@ pub const CUSTOM_STYLES: &str = r#"
         overflow: hidden;
     }
 
+    /* Scrollbar */
     ::-webkit-scrollbar {
         width: 6px;
         height: 6px;
     }
-
     ::-webkit-scrollbar-track {
         background: transparent;
     }
-
     ::-webkit-scrollbar-thumb {
         background: rgba(0, 212, 255, 0.3);
         border-radius: 3px;
     }
-
     ::-webkit-scrollbar-thumb:hover {
         background: rgba(0, 212, 255, 0.5);
+    }
+
+    /* Main Container */
+    .main-container {
+        height: 100vh;
+        display: flex;
+        flex-direction: column;
+        outline: none;
+    }
+
+    /* Title Bar */
+    .title-bar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        height: 36px;
+        background: linear-gradient(to right, #020617, #0f172a);
+        border-bottom: 1px solid rgba(34, 211, 238, 0.2);
+        user-select: none;
+        flex-shrink: 0;
+    }
+    .title-bar-drag {
+        flex: 1;
+        height: 100%;
+        display: flex;
+        align-items: center;
+        padding-left: 12px;
+        cursor: move;
+    }
+    .title-text {
+        font-size: 14px;
+        font-weight: 500;
+        color: #22d3ee;
+    }
+    .title-bar-buttons {
+        display: flex;
+        height: 100%;
+    }
+    .title-btn {
+        width: 48px;
+        height: 100%;
+        border: none;
+        background: transparent;
+        color: #9ca3af;
+        font-size: 12px;
+        cursor: pointer;
+        transition: all 0.15s;
+    }
+    .title-btn:hover {
+        background: rgba(255, 255, 255, 0.1);
+        color: white;
+    }
+    .title-btn-close:hover {
+        background: #dc2626;
+        color: white;
+    }
+
+    /* Stats Bar */
+    .stats-bar {
+        background: linear-gradient(to right, rgba(15, 23, 42, 0.8), rgba(30, 41, 59, 0.8));
+        border-bottom: 1px solid rgba(34, 211, 238, 0.1);
+        padding: 8px 20px;
+        display: flex;
+        align-items: center;
+        gap: 24px;
+        font-size: 12px;
+        flex-shrink: 0;
+    }
+    .stat-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    .stat-item-right {
+        margin-left: auto;
+    }
+    .stat-label {
+        color: #6b7280;
+    }
+    .stat-bar {
+        width: 96px;
+        height: 8px;
+        background: rgba(255, 255, 255, 0.1);
+        border-radius: 4px;
+        overflow: hidden;
+    }
+    .stat-bar-fill {
+        height: 100%;
+        transition: all 0.5s;
+    }
+    .stat-bar-cpu {
+        background: linear-gradient(to right, #22d3ee, #0891b2);
+    }
+    .stat-bar-ram {
+        background: linear-gradient(to right, #a855f7, #7c3aed);
+    }
+    .stat-value {
+        font-family: monospace;
+        min-width: 40px;
+    }
+    .stat-value-cyan { color: #22d3ee; }
+    .stat-value-purple { color: #a855f7; min-width: 100px; }
+    .stat-value-green { color: #4ade80; }
+    .stat-value-yellow { color: #facc15; }
+
+    /* Content Area */
+    .content-area {
+        max-width: 1152px;
+        margin: 0 auto;
+        padding: 20px;
+        flex: 1;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        width: 100%;
+    }
+
+    /* Header */
+    .header-box {
+        text-align: center;
+        margin-bottom: 16px;
+        padding: 16px;
+        background: rgba(255, 255, 255, 0.05);
+        border-radius: 12px;
+        backdrop-filter: blur(4px);
+        flex-shrink: 0;
+    }
+    .header-title {
+        font-size: 24px;
+        margin-bottom: 8px;
+        color: #22d3ee;
+        font-weight: bold;
+    }
+    .header-stats {
+        display: flex;
+        justify-content: center;
+        gap: 32px;
+        font-size: 14px;
+        color: #9ca3af;
+    }
+    .header-shortcuts {
+        color: #4b5563;
+        font-size: 12px;
+    }
+    .status-message {
+        margin-top: 12px;
+        padding: 8px 16px;
+        background: rgba(34, 211, 238, 0.2);
+        border-radius: 6px;
+        font-size: 14px;
+        color: #22d3ee;
+        display: inline-block;
+    }
+
+    /* Controls */
+    .controls {
+        display: flex;
+        gap: 16px;
+        margin-bottom: 16px;
+        align-items: center;
+        flex-wrap: wrap;
+        flex-shrink: 0;
+    }
+    .search-input {
+        flex: 1;
+        min-width: 200px;
+        padding: 12px 16px;
+        border: none;
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.1);
+        color: white;
+        font-size: 14px;
+        outline: none;
+        transition: background 0.15s;
+    }
+    .search-input:focus {
+        background: rgba(255, 255, 255, 0.15);
+    }
+    .search-input::placeholder {
+        color: #6b7280;
+    }
+    .checkbox-label {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: #9ca3af;
+        font-size: 14px;
+        cursor: pointer;
+        user-select: none;
+    }
+    .checkbox {
+        width: 16px;
+        height: 16px;
+        cursor: pointer;
+        accent-color: #22d3ee;
+    }
+
+    /* Buttons */
+    .btn {
+        padding: 12px 24px;
+        border: none;
+        border-radius: 8px;
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.15s;
+    }
+    .btn-primary {
+        background: linear-gradient(to bottom right, #22d3ee, #0891b2);
+        color: white;
+    }
+    .btn-primary:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 10px 25px rgba(34, 211, 238, 0.4);
+    }
+    .btn-primary:active {
+        transform: translateY(0);
+    }
+    .btn-danger {
+        background: linear-gradient(to bottom right, #ef4444, #b91c1c);
+        color: white;
+    }
+    .btn-danger:hover:not(:disabled) {
+        transform: translateY(-2px);
+        box-shadow: 0 10px 25px rgba(239, 68, 68, 0.4);
+    }
+    .btn-danger:active:not(:disabled) {
+        transform: translateY(0);
+    }
+    .btn-danger:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+
+    /* Table */
+    .table-container {
+        background: rgba(255, 255, 255, 0.05);
+        border-radius: 12px;
+        flex: 1;
+        overflow-y: auto;
+        overflow-x: hidden;
+        min-height: 0;
+    }
+    .process-table {
+        width: 100%;
+        border-collapse: collapse;
+    }
+    .table-header {
+        position: sticky;
+        top: 0;
+        background: rgba(34, 211, 238, 0.2);
+        backdrop-filter: blur(4px);
+        z-index: 10;
+    }
+    .th {
+        padding: 12px 16px;
+        text-align: left;
+        font-weight: 600;
+        color: #22d3ee;
+        border-bottom: 2px solid rgba(34, 211, 238, 0.3);
+        font-size: 14px;
+        user-select: none;
+    }
+    .th.sortable {
+        cursor: pointer;
+        transition: background 0.15s;
+    }
+    .th.sortable:hover {
+        background: rgba(34, 211, 238, 0.3);
+    }
+
+    /* Process Row */
+    .process-row {
+        cursor: pointer;
+        transition: background 0.15s;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    }
+    .process-row:hover {
+        background: rgba(34, 211, 238, 0.1);
+    }
+    .process-row.selected {
+        border-left: 4px solid #ef4444;
+        background: rgba(239, 68, 68, 0.2);
+    }
+    .process-row.selected:hover {
+        background: rgba(239, 68, 68, 0.3);
+    }
+    .cell {
+        padding: 12px 16px;
+    }
+    .cell-pid {
+        font-family: monospace;
+        color: #facc15;
+        width: 80px;
+    }
+    .cell-name {
+        font-weight: 500;
+    }
+    .cell-cpu {
+        font-family: monospace;
+        width: 80px;
+        text-align: center;
+    }
+    .cell-threads {
+        font-family: monospace;
+        color: #a855f7;
+        width: 80px;
+        text-align: center;
+    }
+    .cell-memory {
+        width: 176px;
+    }
+    .cell-path {
+        font-size: 12px;
+        color: #6b7280;
+        max-width: 200px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .cell-path:hover {
+        color: #9ca3af;
+    }
+
+    /* CPU Colors */
+    .cpu-low { color: #4ade80; }
+    .cpu-medium { color: #facc15; }
+    .cpu-high { color: #f87171; }
+
+    /* Memory Bar */
+    .memory-bar-container {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    .memory-bar-bg {
+        flex: 1;
+        height: 8px;
+        background: rgba(255, 255, 255, 0.1);
+        border-radius: 4px;
+        overflow: hidden;
+    }
+    .memory-bar-fill {
+        height: 100%;
+        background: linear-gradient(to right, #4ade80, #22d3ee, #ef4444);
+        border-radius: 4px;
+        transition: width 0.3s;
+    }
+    .memory-text {
+        font-family: monospace;
+        color: #4ade80;
+        font-size: 12px;
+        min-width: 70px;
+        text-align: right;
+    }
+
+    /* Context Menu */
+    .context-menu {
+        position: fixed;
+        background: #1e293b;
+        border: 1px solid rgba(34, 211, 238, 0.3);
+        border-radius: 8px;
+        box-shadow: 0 25px 50px rgba(0, 0, 0, 0.5);
+        padding: 4px 0;
+        min-width: 180px;
+        z-index: 50;
+    }
+    .context-menu-item {
+        width: 100%;
+        padding: 8px 16px;
+        text-align: left;
+        font-size: 14px;
+        color: #d1d5db;
+        background: transparent;
+        border: none;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        cursor: pointer;
+        transition: background 0.15s;
+    }
+    .context-menu-item:hover:not(:disabled) {
+        background: rgba(34, 211, 238, 0.2);
+    }
+    .context-menu-item:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+    .context-menu-item-danger {
+        color: #f87171;
+    }
+    .context-menu-item-danger:hover {
+        background: rgba(239, 68, 68, 0.2);
+    }
+    .context-menu-separator {
+        height: 1px;
+        background: rgba(34, 211, 238, 0.2);
+        margin: 4px 0;
     }
 "#;
