@@ -1,5 +1,5 @@
 //! UI module for Process Monitor
-//! Contains Dioxus components and styles
+//! Contains Dioxus components with Tailwind CSS
 
 use dioxus::prelude::*;
 use crate::process::{ProcessInfo, get_processes, kill_process};
@@ -36,27 +36,32 @@ pub fn ProcessRow(
     let pid = process.pid;
     let exe_filename = process.exe_path.split('\\').last().unwrap_or(&process.exe_path).to_string();
     
+    let row_class = if is_selected {
+        "border-l-4 border-red-500 bg-red-500/20 hover:bg-red-500/30 cursor-pointer transition-colors"
+    } else {
+        "hover:bg-cyan-500/10 cursor-pointer transition-colors border-b border-white/5"
+    };
+
     rsx! {
         tr { 
             key: "{process.pid}",
-            class: if is_selected { "selected" } else { "" },
+            class: "{row_class}",
             onclick: move |_| on_select.call(pid),
-            td { class: "pid", "{process.pid}" }
-            td { class: "name", "{process.name}" }
-            td { class: "threads", "{process.thread_count}" }
-            td { class: "memory",
-                div { class: "memory-cell",
-                    div { 
-                        class: "memory-bar",
+            td { class: "px-4 py-3 font-mono text-yellow-400 w-20", "{process.pid}" }
+            td { class: "px-4 py-3 font-medium", "{process.name}" }
+            td { class: "px-4 py-3 font-mono text-purple-400 w-20 text-center", "{process.thread_count}" }
+            td { class: "px-4 py-3 w-44",
+                div { class: "flex items-center gap-2",
+                    div { class: "flex-1 h-2 bg-white/10 rounded overflow-hidden",
                         div { 
-                            class: "memory-bar-fill",
+                            class: "h-full bg-gradient-to-r from-green-400 via-cyan-400 to-red-500 rounded transition-all duration-300",
                             style: "width: {memory_percent}%",
                         }
                     }
-                    span { class: "memory-text", "{process.memory_mb:.1} MB" }
+                    span { class: "font-mono text-green-400 text-xs min-w-[70px] text-right", "{process.memory_mb:.1} MB" }
                 }
             }
-            td { class: "path", title: "{process.exe_path}", "{exe_filename}" }
+            td { class: "px-4 py-3 text-xs text-gray-500 max-w-[200px] truncate hover:text-gray-400", title: "{process.exe_path}", "{exe_filename}" }
         }
     }
 }
@@ -136,21 +141,23 @@ pub fn App() -> Element {
     };
 
     rsx! {
-        style { {STYLES} }
+        // Tailwind CDN
+        script { src: "https://cdn.tailwindcss.com" }
+        style { {CUSTOM_STYLES} }
 
         // Custom title bar for borderless window
-        div { class: "title-bar",
+        div { class: "flex justify-between items-center h-9 bg-gradient-to-r from-slate-950 to-slate-900 border-b border-cyan-500/20 select-none",
             div { 
-                class: "title-bar-drag",
+                class: "flex-1 h-full flex items-center pl-3 cursor-move",
                 onmousedown: move |_| {
                     let window = dioxus::desktop::window();
                     let _ = window.drag_window();
                 },
-                span { class: "title-text", "🖥️ Process Monitor" }
+                span { class: "text-sm font-medium text-cyan-400", "🖥️ Process Monitor" }
             }
-            div { class: "title-bar-buttons",
+            div { class: "flex h-full",
                 button {
-                    class: "title-btn minimize-btn",
+                    class: "w-12 h-full border-none bg-transparent text-gray-400 text-xs cursor-pointer transition-all hover:bg-white/10 hover:text-white",
                     onclick: move |_| {
                         let window = dioxus::desktop::window();
                         window.set_minimized(true);
@@ -158,7 +165,7 @@ pub fn App() -> Element {
                     "─"
                 }
                 button {
-                    class: "title-btn maximize-btn",
+                    class: "w-12 h-full border-none bg-transparent text-gray-400 text-xs cursor-pointer transition-all hover:bg-white/10 hover:text-white",
                     onclick: move |_| {
                         let window = dioxus::desktop::window();
                         window.set_maximized(!window.is_maximized());
@@ -166,7 +173,7 @@ pub fn App() -> Element {
                     "□"
                 }
                 button {
-                    class: "title-btn close-btn",
+                    class: "w-12 h-full border-none bg-transparent text-gray-400 text-xs cursor-pointer transition-all hover:bg-red-600 hover:text-white",
                     onclick: move |_| {
                         let window = dioxus::desktop::window();
                         window.close();
@@ -176,32 +183,33 @@ pub fn App() -> Element {
             }
         }
 
-        div { class: "container",
+        div { class: "max-w-6xl mx-auto p-5 h-[calc(100vh-36px)] overflow-hidden flex flex-col",
             // Header
-            div { class: "header",
-                h1 { "🖥️ Windows Process Monitor" }
-                div { class: "stats",
+            div { class: "text-center mb-5 p-5 bg-white/5 rounded-xl backdrop-blur-sm",
+                h1 { class: "text-3xl mb-2 text-cyan-400 font-bold", "🖥️ Windows Process Monitor" }
+                div { class: "flex justify-center gap-8 text-sm text-gray-400",
                     span { "Processes: {process_count}" }
                     span { "Total Memory: {total_memory:.1} MB" }
                 }
                 if !status_message.read().is_empty() {
-                    div { class: "status-message", "{status_message}" }
+                    div { class: "mt-3 py-2 px-4 bg-cyan-500/20 rounded-md text-sm text-cyan-400 inline-block", "{status_message}" }
                 }
             }
 
             // Controls
-            div { class: "controls",
+            div { class: "flex gap-4 mb-5 items-center flex-wrap",
                 input {
-                    class: "search-input",
+                    class: "flex-1 min-w-[200px] py-3 px-4 border-none rounded-lg bg-white/10 text-white text-sm outline-none transition-colors focus:bg-white/15 placeholder:text-gray-500",
                     r#type: "text",
                     placeholder: "Search by name, PID, or path...",
                     value: "{search_query}",
                     oninput: move |e| search_query.set(e.value().clone()),
                 }
                 
-                label { class: "auto-refresh-toggle",
+                label { class: "flex items-center gap-2 text-gray-400 text-sm cursor-pointer select-none",
                     input {
                         r#type: "checkbox",
+                        class: "w-4 h-4 cursor-pointer accent-cyan-400",
                         checked: *auto_refresh.read(),
                         onchange: move |e| auto_refresh.set(e.checked()),
                     }
@@ -209,13 +217,13 @@ pub fn App() -> Element {
                 }
 
                 button {
-                    class: "refresh-btn",
+                    class: "py-3 px-6 border-none rounded-lg text-sm font-semibold cursor-pointer transition-all bg-gradient-to-br from-cyan-400 to-cyan-600 text-white hover:-translate-y-0.5 hover:shadow-lg hover:shadow-cyan-500/40 active:translate-y-0",
                     onclick: move |_| processes.set(get_processes()),
                     "🔄 Refresh"
                 }
 
                 button {
-                    class: "kill-btn",
+                    class: "py-3 px-6 border-none rounded-lg text-sm font-semibold cursor-pointer transition-all bg-gradient-to-br from-red-500 to-red-700 text-white hover:-translate-y-0.5 hover:shadow-lg hover:shadow-red-500/40 active:translate-y-0 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0 disabled:hover:shadow-none",
                     disabled: selected_pid.read().is_none(),
                     onclick: move |_| {
                         let pid_to_kill = *selected_pid.read();
@@ -227,7 +235,6 @@ pub fn App() -> Element {
                             } else {
                                 status_message.set(format!("✗ Failed to terminate process {} (access denied?)", pid));
                             }
-                            // Clear message after 3 seconds
                             spawn(async move {
                                 tokio::time::sleep(std::time::Duration::from_secs(3)).await;
                                 status_message.set(String::new());
@@ -239,12 +246,12 @@ pub fn App() -> Element {
             }
 
             // Process table
-            div { class: "table-container",
-                table { class: "process-table",
-                    thead {
+            div { class: "bg-white/5 rounded-xl flex-1 overflow-y-auto overflow-x-hidden min-h-0",
+                table { class: "w-full border-collapse",
+                    thead { class: "sticky top-0 bg-cyan-500/20 backdrop-blur-sm z-10",
                         tr {
                             th { 
-                                class: "sortable",
+                                class: "px-4 py-4 text-left font-semibold text-cyan-400 border-b-2 border-cyan-500/30 cursor-pointer select-none transition-colors hover:bg-cyan-500/30",
                                 onclick: move |_| {
                                     if *sort_column.read() == SortColumn::Pid {
                                         let new_order = if *sort_order.read() == SortOrder::Ascending { SortOrder::Descending } else { SortOrder::Ascending };
@@ -257,7 +264,7 @@ pub fn App() -> Element {
                                 "PID{sort_indicator(SortColumn::Pid)}" 
                             }
                             th { 
-                                class: "sortable",
+                                class: "px-4 py-4 text-left font-semibold text-cyan-400 border-b-2 border-cyan-500/30 cursor-pointer select-none transition-colors hover:bg-cyan-500/30",
                                 onclick: move |_| {
                                     if *sort_column.read() == SortColumn::Name {
                                         let new_order = if *sort_order.read() == SortOrder::Ascending { SortOrder::Descending } else { SortOrder::Ascending };
@@ -270,7 +277,7 @@ pub fn App() -> Element {
                                 "Process Name{sort_indicator(SortColumn::Name)}" 
                             }
                             th { 
-                                class: "sortable",
+                                class: "px-4 py-4 text-left font-semibold text-cyan-400 border-b-2 border-cyan-500/30 cursor-pointer select-none transition-colors hover:bg-cyan-500/30",
                                 onclick: move |_| {
                                     if *sort_column.read() == SortColumn::Threads {
                                         let new_order = if *sort_order.read() == SortOrder::Ascending { SortOrder::Descending } else { SortOrder::Ascending };
@@ -283,7 +290,7 @@ pub fn App() -> Element {
                                 "Threads{sort_indicator(SortColumn::Threads)}" 
                             }
                             th { 
-                                class: "sortable",
+                                class: "px-4 py-4 text-left font-semibold text-cyan-400 border-b-2 border-cyan-500/30 cursor-pointer select-none transition-colors hover:bg-cyan-500/30",
                                 onclick: move |_| {
                                     if *sort_column.read() == SortColumn::Memory {
                                         let new_order = if *sort_order.read() == SortOrder::Ascending { SortOrder::Descending } else { SortOrder::Ascending };
@@ -295,7 +302,7 @@ pub fn App() -> Element {
                                 },
                                 "Memory{sort_indicator(SortColumn::Memory)}" 
                             }
-                            th { "Path" }
+                            th { class: "px-4 py-4 text-left font-semibold text-cyan-400 border-b-2 border-cyan-500/30", "Path" }
                         }
                     }
                     tbody {
@@ -321,8 +328,8 @@ pub fn App() -> Element {
     }
 }
 
-/// CSS Styles
-pub const STYLES: &str = r#"
+/// Minimal custom styles (only for things Tailwind can't handle easily)
+pub const CUSTOM_STYLES: &str = r#"
     * {
         margin: 0;
         padding: 0;
@@ -337,7 +344,6 @@ pub const STYLES: &str = r#"
         overflow: hidden;
     }
 
-    /* Hide scrollbars globally but allow scrolling where needed */
     ::-webkit-scrollbar {
         width: 6px;
         height: 6px;
@@ -354,308 +360,5 @@ pub const STYLES: &str = r#"
 
     ::-webkit-scrollbar-thumb:hover {
         background: rgba(0, 212, 255, 0.5);
-    }
-
-    /* Custom Title Bar */
-    .title-bar {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        height: 36px;
-        background: linear-gradient(135deg, #0d0d1a 0%, #1a1a2e 100%);
-        border-bottom: 1px solid rgba(0, 212, 255, 0.2);
-        user-select: none;
-    }
-
-    .title-bar-drag {
-        flex: 1;
-        height: 100%;
-        display: flex;
-        align-items: center;
-        padding-left: 12px;
-        cursor: move;
-    }
-
-    .title-text {
-        font-size: 13px;
-        font-weight: 500;
-        color: #00d4ff;
-    }
-
-    .title-bar-buttons {
-        display: flex;
-        height: 100%;
-    }
-
-    .title-btn {
-        width: 46px;
-        height: 100%;
-        border: none;
-        background: transparent;
-        color: #aaa;
-        font-size: 12px;
-        cursor: pointer;
-        transition: background 0.15s, color 0.15s;
-    }
-
-    .title-btn:hover {
-        background: rgba(255, 255, 255, 0.1);
-        color: #fff;
-    }
-
-    .close-btn:hover {
-        background: #e81123;
-        color: #fff;
-    }
-
-    .container {
-        max-width: 1200px;
-        margin: 0 auto;
-        padding: 20px;
-        height: calc(100vh - 36px);
-        overflow: hidden;
-        display: flex;
-        flex-direction: column;
-    }
-
-    .header {
-        text-align: center;
-        margin-bottom: 20px;
-        padding: 20px;
-        background: rgba(255, 255, 255, 0.05);
-        border-radius: 12px;
-        backdrop-filter: blur(10px);
-    }
-
-    .header h1 {
-        font-size: 28px;
-        margin-bottom: 10px;
-        color: #00d4ff;
-    }
-
-    .stats {
-        display: flex;
-        justify-content: center;
-        gap: 30px;
-        font-size: 14px;
-        color: #aaa;
-    }
-
-    .status-message {
-        margin-top: 10px;
-        padding: 8px 16px;
-        background: rgba(0, 212, 255, 0.2);
-        border-radius: 6px;
-        font-size: 13px;
-        color: #00d4ff;
-    }
-
-    .controls {
-        display: flex;
-        gap: 15px;
-        margin-bottom: 20px;
-        align-items: center;
-        flex-wrap: wrap;
-    }
-
-    .search-input {
-        flex: 1;
-        min-width: 200px;
-        padding: 12px 16px;
-        border: none;
-        border-radius: 8px;
-        background: rgba(255, 255, 255, 0.1);
-        color: #fff;
-        font-size: 14px;
-        outline: none;
-        transition: background 0.3s;
-    }
-
-    .search-input:focus {
-        background: rgba(255, 255, 255, 0.15);
-    }
-
-    .search-input::placeholder {
-        color: #888;
-    }
-
-    .auto-refresh-toggle {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        color: #aaa;
-        font-size: 14px;
-        cursor: pointer;
-        user-select: none;
-    }
-
-    .auto-refresh-toggle input {
-        width: 18px;
-        height: 18px;
-        cursor: pointer;
-        accent-color: #00d4ff;
-    }
-
-    .refresh-btn, .kill-btn {
-        padding: 12px 24px;
-        border: none;
-        border-radius: 8px;
-        font-size: 14px;
-        font-weight: 600;
-        cursor: pointer;
-        transition: transform 0.2s, box-shadow 0.2s, opacity 0.2s;
-    }
-
-    .refresh-btn {
-        background: linear-gradient(135deg, #00d4ff 0%, #0099cc 100%);
-        color: #fff;
-    }
-
-    .refresh-btn:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 5px 20px rgba(0, 212, 255, 0.4);
-    }
-
-    .kill-btn {
-        background: linear-gradient(135deg, #ff4757 0%, #cc0000 100%);
-        color: #fff;
-    }
-
-    .kill-btn:hover:not(:disabled) {
-        transform: translateY(-2px);
-        box-shadow: 0 5px 20px rgba(255, 71, 87, 0.4);
-    }
-
-    .kill-btn:disabled {
-        opacity: 0.5;
-        cursor: not-allowed;
-        transform: none;
-    }
-
-    .refresh-btn:active, .kill-btn:active:not(:disabled) {
-        transform: translateY(0);
-    }
-
-    .table-container {
-        background: rgba(255, 255, 255, 0.05);
-        border-radius: 12px;
-        flex: 1;
-        overflow-y: auto;
-        overflow-x: hidden;
-        min-height: 0;
-    }
-
-    .process-table {
-        width: 100%;
-        border-collapse: collapse;
-    }
-
-    .process-table thead {
-        position: sticky;
-        top: 0;
-        background: rgba(0, 212, 255, 0.2);
-        backdrop-filter: blur(10px);
-        z-index: 10;
-    }
-
-    .process-table th {
-        padding: 15px;
-        text-align: left;
-        font-weight: 600;
-        color: #00d4ff;
-        border-bottom: 2px solid rgba(0, 212, 255, 0.3);
-    }
-
-    .process-table th.sortable {
-        cursor: pointer;
-        user-select: none;
-        transition: background 0.2s;
-    }
-
-    .process-table th.sortable:hover {
-        background: rgba(0, 212, 255, 0.3);
-    }
-
-    .process-table td {
-        padding: 12px 15px;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-    }
-
-    .process-table tbody tr {
-        transition: background 0.2s;
-        cursor: pointer;
-    }
-
-    .process-table tbody tr:hover {
-        background: rgba(0, 212, 255, 0.1);
-    }
-
-    .process-table tbody tr.selected {
-        background: rgba(255, 71, 87, 0.2);
-        border-left: 3px solid #ff4757;
-    }
-
-    .pid {
-        font-family: 'Consolas', monospace;
-        color: #ffd700;
-        width: 80px;
-    }
-
-    .name {
-        font-weight: 500;
-        min-width: 150px;
-    }
-
-    .threads {
-        font-family: 'Consolas', monospace;
-        color: #a78bfa;
-        width: 80px;
-        text-align: center;
-    }
-
-    .memory {
-        width: 180px;
-    }
-
-    .memory-cell {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-    }
-
-    .memory-bar {
-        flex: 1;
-        height: 8px;
-        background: rgba(255, 255, 255, 0.1);
-        border-radius: 4px;
-        overflow: hidden;
-    }
-
-    .memory-bar-fill {
-        height: 100%;
-        background: linear-gradient(90deg, #00ff88 0%, #00d4ff 50%, #ff4757 100%);
-        border-radius: 4px;
-        transition: width 0.3s ease;
-    }
-
-    .memory-text {
-        font-family: 'Consolas', monospace;
-        color: #00ff88;
-        font-size: 12px;
-        min-width: 70px;
-        text-align: right;
-    }
-
-    .path {
-        font-size: 12px;
-        color: #888;
-        max-width: 200px;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-    }
-
-    .path:hover {
-        color: #aaa;
     }
 "#;
