@@ -868,6 +868,21 @@ pub const CUSTOM_STYLES: &str = r#"
         background: rgba(34, 211, 238, 0.1);
     }
 
+    /* Experimental Badge */
+    .experimental-badge {
+        font-size: 9px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        padding: 2px 6px;
+        margin-left: 6px;
+        border-radius: 4px;
+        background: rgba(251, 191, 36, 0.2);
+        color: #fbbf24;
+        border: 1px solid rgba(251, 191, 36, 0.3);
+        vertical-align: middle;
+    }
+
     /* Tab Content */
     .process-tab,
     .network-tab,
@@ -1568,6 +1583,182 @@ pub const CUSTOM_STYLES: &str = r#"
         font-family: 'Cascadia Code', 'Consolas', monospace;
         color: #facc15;
         font-size: 13px;
+    }
+
+    /* Callback Tab Styles */
+    .callback-tab {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        outline: none;
+    }
+
+    .callback-table .th {
+        padding: 10px 12px;
+        font-size: 13px;
+    }
+    .callback-table .cell {
+        padding: 10px 12px;
+        font-size: 13px;
+    }
+    .cell-time {
+        font-family: 'Cascadia Code', 'Consolas', monospace;
+        color: #9ca3af;
+        width: 110px;
+    }
+    .cell-event-type {
+        font-weight: 600;
+        width: 140px;
+    }
+    .event-type-process-create {
+        color: #4ade80;
+    }
+    .event-type-process-exit {
+        color: #f87171;
+    }
+    .event-type-thread-create {
+        color: #60a5fa;
+    }
+    .event-type-thread-exit {
+        color: #fbbf24;
+    }
+    .event-type-image-load {
+        color: #a78bfa;
+    }
+    .event-type-handle-process {
+        color: #f472b6;
+    }
+    .event-type-handle-thread {
+        color: #fb7185;
+    }
+    .event-type-registry-read {
+        color: #38bdf8;
+    }
+    .event-type-registry-write {
+        color: #fb923c;
+    }
+    .callback-filter-select {
+        min-width: 180px;
+    }
+    .pagination-controls {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        margin-left: auto;
+    }
+    .pagination-controls .btn-small {
+        padding: 4px 8px;
+        font-size: 12px;
+        min-width: 28px;
+    }
+    .page-info {
+        font-size: 12px;
+        color: #9ca3af;
+        padding: 0 8px;
+    }
+    .cell-details {
+        font-size: 12px;
+        color: #9ca3af;
+        max-width: 350px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .cell-details:hover {
+        color: #d1d5db;
+    }
+
+    /* Driver status indicator */
+    .driver-status {
+        font-size: 12px;
+        font-weight: 600;
+        padding: 4px 12px;
+        border-radius: 12px;
+        margin-left: 16px;
+    }
+    .driver-status-loaded {
+        background: rgba(74, 222, 128, 0.2);
+        color: #4ade80;
+        border: 1px solid rgba(74, 222, 128, 0.3);
+    }
+    .driver-status-not-loaded {
+        background: rgba(248, 113, 113, 0.2);
+        color: #f87171;
+        border: 1px solid rgba(248, 113, 113, 0.3);
+    }
+
+    /* Driver not loaded notice */
+    .driver-not-loaded-notice {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 60px 40px;
+        text-align: center;
+    }
+    .driver-not-loaded-notice h2 {
+        font-size: 20px;
+        color: #f87171;
+        margin-bottom: 16px;
+    }
+    .driver-not-loaded-notice p {
+        color: #9ca3af;
+        margin-bottom: 16px;
+        font-size: 14px;
+    }
+    .driver-instructions {
+        background: rgba(0, 0, 0, 0.4);
+        padding: 16px 24px;
+        border-radius: 8px;
+        font-family: 'Cascadia Code', 'Consolas', monospace;
+        font-size: 13px;
+        color: #22d3ee;
+        text-align: left;
+        white-space: pre-wrap;
+        margin-bottom: 16px;
+        border: 1px solid rgba(34, 211, 238, 0.2);
+    }
+    .driver-note {
+        color: #6b7280;
+        font-size: 12px;
+        font-style: italic;
+    }
+
+    /* Collection status indicator */
+    .collection-status {
+        font-size: 12px;
+        font-weight: 600;
+        padding: 4px 12px;
+        border-radius: 12px;
+        margin-left: 8px;
+    }
+    .collection-active {
+        background: rgba(74, 222, 128, 0.2);
+        color: #4ade80;
+        border: 1px solid rgba(74, 222, 128, 0.3);
+    }
+    .collection-inactive {
+        background: rgba(251, 191, 36, 0.2);
+        color: #fbbf24;
+        border: 1px solid rgba(251, 191, 36, 0.3);
+    }
+
+    /* Success button */
+    .btn-success {
+        background: linear-gradient(to bottom right, #4ade80, #22c55e);
+        color: white;
+    }
+    .btn-success:hover:not(:disabled) {
+        transform: translateY(-2px);
+        box-shadow: 0 10px 25px rgba(74, 222, 128, 0.4);
+    }
+    .btn-success:active:not(:disabled) {
+        transform: translateY(0);
+    }
+    .btn-success:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
     }
 
 "#;

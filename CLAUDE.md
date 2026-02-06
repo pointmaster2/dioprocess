@@ -22,6 +22,13 @@ crates/
 ├── process/       # Process enumeration, threads, handles, modules, CPU/memory
 ├── network/       # TCP/UDP connection enumeration via Windows IP Helper API
 ├── service/       # Windows Service Control Manager ops (enum, start, stop, create, delete)
+├── callback/      # Kernel driver communication + SQLite event storage
+│   └── src/
+│       ├── lib.rs     # Module declarations + pub use re-exports
+│       ├── error.rs   # CallbackError enum
+│       ├── types.rs   # CallbackEvent, EventType, EventCategory, RegistryOperation
+│       ├── driver.rs  # Driver communication (is_driver_loaded, read_events)
+│       └── storage.rs # SQLite persistence (EventStorage, EventFilter, batched writes)
 ├── misc/          # DLL injection (7 methods), DLL unhooking, hook detection, process creation, process hollowing, token theft, module unloading, memory ops
 │   └── src/
 │       ├── lib.rs                      # Module declarations + pub use re-exports (slim)
@@ -63,7 +70,8 @@ crates/
 │       │   ├── token_thief_window.rs    # Token theft + impersonation modal
 │       │   ├── function_stomping_window.rs  # Function stomping injection modal
 │       │   ├── ghost_process_window.rs  # Process ghosting modal
-│       │   └── hook_scan_window.rs      # IAT hook detection modal
+│       │   ├── hook_scan_window.rs      # IAT hook detection modal
+│       │   └── callback_tab.rs          # System Events tab (Experimental)
 │       ├── routes.rs             # Tab routing definitions
 │       ├── state.rs              # Global signal state types
 │       ├── helpers.rs            # Clipboard utilities
@@ -82,6 +90,7 @@ UI Layer (ui crate — Dioxus components + signals)
     ├── process crate  → Windows API (ToolHelp32, Threading, ProcessStatus)
     ├── network crate  → Windows API (IpHelper, WinSock)
     ├── service crate  → Windows API (Services / SCM)
+    ├── callback crate → Kernel driver (\\.\DioProcess) + SQLite (%LOCALAPPDATA%\DioProcess\events.db)
     └── misc crate     → Windows API (Memory, LibraryLoader, Debug, Security)
 ```
 
@@ -98,6 +107,11 @@ UI components call library functions directly. Libraries wrap unsafe Windows API
 | `ModuleInfo` | process | base_address, size, path, entry_point |
 | `MemoryRegionInfo` | process | base_address, allocation_base, region_size, state, mem_type, protect |
 | `ProcessStats` | process | cpu_usage, memory_mb |
+| `CallbackEvent` | callback | event_type, timestamp, process_id, process_name, image_base/size, key_name, desired_access, etc. |
+| `EventType` | callback | ProcessCreate/Exit, ThreadCreate/Exit, ImageLoad, Handle ops (4), Registry ops (7) |
+| `EventCategory` | callback | Process, Thread, Image, Handle, Registry |
+| `EventStorage` | callback | SQLite wrapper with batched writes, queries, retention cleanup |
+| `EventFilter` | callback | event_type, category, process_id, search (for DB queries) |
 | `NetworkConnection` | network | protocol, local/remote addr:port, state, pid |
 | `ServiceInfo` | service | name, display_name, status, start_type, binary_path, description, pid |
 
@@ -295,10 +309,162 @@ Access via right-click context menu > Inspect > Hook Scan:
 - Uses `misc::scan_process_hooks()` function from `hook_scanner.rs`
 - Helper functions: `misc::get_system_directory_path()`, `misc::enumerate_process_modules()`
 
+## System Events - Experimental (callback crate)
+
+Real-time monitoring of kernel callbacks via the DioProcess kernel driver. Captures process, thread, image load, handle operations, and registry events.
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    DioProcess UI (Rust/Dioxus)              │
+│  ┌────────────────────────────────────────────────────────┐ │
+│  │              CallbackTab Component                     │ │
+│  │  - Event table with filtering/sorting                  │ │
+│  │  - Real-time updates via polling (1s)                  │ │
+│  │  - CSV export, driver status indicator                 │ │
+│  └────────────────────────────────────────────────────────┘ │
+│                           │                                  │
+│  ┌────────────────────────▼───────────────────────────────┐ │
+│  │              callback crate                             │ │
+│  │  - is_driver_loaded() - check if driver available      │ │
+│  │  - read_events() - ReadFile to get events              │ │
+│  │  - CallbackEvent, EventType, EventCategory structs     │ │
+│  └────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────┘
+                            │
+                   DeviceIoControl / ReadFile
+                   \\.\DioProcess
+                            │
+┌───────────────────────────▼─────────────────────────────────┐
+│              Kernel Driver (C++ WDM)                        │
+│  - PsSetCreateProcessNotifyRoutineEx (process callbacks)    │
+│  - PsSetCreateThreadNotifyRoutine (thread callbacks)        │
+│  - PsSetLoadImageNotifyRoutine (image load callbacks)       │
+│  - ObRegisterCallbacks (handle operation callbacks)         │
+│  - CmRegisterCallbackEx (registry callbacks)                │
+│  - Events queued and delivered via IRP_MJ_READ              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Event types (matching DioProcessCommon.h)
+
+| Category | Event Type | Description |
+|----------|------------|-------------|
+| Process | ProcessCreate | New process created (includes command line, PPID) |
+| Process | ProcessExit | Process terminated (includes exit code) |
+| Thread | ThreadCreate | New thread created in a process |
+| Thread | ThreadExit | Thread terminated (includes exit code) |
+| Image | ImageLoad | DLL/EXE loaded (includes base address, size, path) |
+| Handle | ProcessHandleCreate | Handle opened to a process |
+| Handle | ProcessHandleDuplicate | Process handle duplicated |
+| Handle | ThreadHandleCreate | Handle opened to a thread |
+| Handle | ThreadHandleDuplicate | Thread handle duplicated |
+| Registry | RegistryCreate | Registry key created |
+| Registry | RegistryOpen | Registry key opened |
+| Registry | RegistrySetValue | Registry value written |
+| Registry | RegistryDeleteKey | Registry key deleted |
+| Registry | RegistryDeleteValue | Registry value deleted |
+| Registry | RegistryRenameKey | Registry key renamed |
+| Registry | RegistryQueryValue | Registry value queried |
+
+### Driver data structures
+
+```c
+enum class EventType {
+    ProcessCreate, ProcessExit, ThreadCreate, ThreadExit,
+    ImageLoad,
+    ProcessHandleCreate, ProcessHandleDuplicate, ThreadHandleCreate, ThreadHandleDuplicate,
+    RegistryCreate, RegistryOpen, RegistrySetValue, RegistryDeleteKey,
+    RegistryDeleteValue, RegistryRenameKey, RegistryQueryValue
+};
+
+struct ImageLoadInfo {
+    ULONG ProcessId;
+    ULONG64 ImageBase;
+    ULONG64 ImageSize;
+    BOOLEAN IsSystemImage;
+    BOOLEAN IsKernelImage;
+    ULONG ImageNameLength;
+    WCHAR ImageName[1];
+};
+
+struct HandleOperationInfo {
+    ULONG SourceProcessId;
+    ULONG SourceThreadId;
+    ULONG TargetProcessId;
+    ULONG TargetThreadId;
+    ULONG DesiredAccess;
+    ULONG GrantedAccess;
+    BOOLEAN IsKernelHandle;
+    ULONG SourceImageNameLength;
+    WCHAR SourceImageName[1];
+};
+
+struct RegistryOperationInfo {
+    ULONG ProcessId;
+    ULONG ThreadId;
+    RegistryOperation Operation;
+    NTSTATUS Status;
+    ULONG KeyNameLength;
+    ULONG ValueNameLength;
+    WCHAR Names[1];  // KeyName followed by ValueName
+};
+```
+
+### System Events tab features
+
+Access via "System Events" tab in the main navigation (marked as Experimental):
+- **Event table** — Time, Type, PID, Process Name, Details columns
+- **SQLite storage** — Events persisted to `%LOCALAPPDATA%\DioProcess\events.db`
+- **Batched writes** — 500 events or 100ms flush interval for performance
+- **Pagination** — 500 events per page with navigation controls (<< < > >>)
+- **24-hour retention** — Auto-cleanup of old events (runs hourly)
+- **Category filter** — Filter by Process, Thread, Image, Handle, or Registry events
+- **Type filter** — Filter by individual event types (17 event types total)
+- **Search filter** — By PID, process name, command line, image name, registry key/value
+- **Auto-refresh** — 1-second polling when driver loaded
+- **Driver status** — Green/red indicator showing driver availability
+- **DB stats** — Header shows total event count and database file size
+- **Clear all** — Delete all events from database
+- **CSV export** — Export current page to CSV file
+- **Color coding** — Green (process create), red (process exit), blue (thread create), yellow (thread exit), purple (image load), pink (handle ops), cyan/orange (registry read/write)
+- **Context menu** — Copy PID, Copy Process Name, Copy Command Line, Filter by PID/Name
+
+### Loading the driver
+
+```batch
+:: Build with Visual Studio + WDK
+:: Enable test signing mode (for unsigned drivers)
+bcdedit /set testsigning on
+
+:: Create and start the driver service
+sc create DioProcess type= kernel binPath= "C:\path\to\DioProcess.sys"
+sc start DioProcess
+
+:: Stop and delete the service
+sc stop DioProcess
+sc delete DioProcess
+```
+
+### Driver location
+
+The kernel driver source is in `kernelmode/DioProcess/`:
+- `DioProcess.sln` — Visual Studio solution
+- `DioProcessDriver/DioProcessDriver.cpp` — Main driver code (device name: `\\.\DioProcess`)
+- `DioProcessDriver/DioProcessCommon.h` — Shared data structures
+- `DioProcessCli/` — Test CLI client
+
 ## No tests
 
 There is no test infrastructure. Development relies on manual testing through the UI.
 
-## No external services or databases
+## Local storage
 
-The app is fully self-contained, communicating only with the Windows OS via system APIs.
+The app uses SQLite for kernel callback event persistence:
+- **Location:** `%LOCALAPPDATA%\DioProcess\events.db`
+- **Engine:** rusqlite 0.31 with bundled SQLite
+- **Mode:** WAL (Write-Ahead Logging) for concurrent access
+- **Retention:** Events older than 24 hours auto-deleted
+
+No external services, network connections, or cloud storage — fully self-contained.
