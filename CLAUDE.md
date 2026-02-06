@@ -19,7 +19,7 @@ DioProcess is a Windows desktop system monitoring and process management tool bu
 
 ```
 crates/
-├── process/       # Process enumeration, threads, handles, modules, CPU/memory
+├── process/       # Process enumeration, threads, handles, modules, CPU/memory, string scanning
 ├── network/       # TCP/UDP connection enumeration via Windows IP Helper API
 ├── service/       # Windows Service Control Manager ops (enum, start, stop, create, delete)
 ├── callback/      # Kernel driver communication + SQLite event storage
@@ -29,7 +29,7 @@ crates/
 │       ├── types.rs   # CallbackEvent, EventType, EventCategory, RegistryOperation
 │       ├── driver.rs  # Driver communication (is_driver_loaded, read_events)
 │       └── storage.rs # SQLite persistence (EventStorage, EventFilter, batched writes)
-├── misc/          # DLL injection (7 methods), DLL unhooking, hook detection, process creation, process hollowing, token theft, module unloading, memory ops
+├── misc/          # DLL injection (7 methods), DLL unhooking, hook detection, process creation, process hollowing, ghostly hollowing, process herpaderping, herpaderping hollowing, token theft, module unloading, memory ops
 │   └── src/
 │       ├── lib.rs                      # Module declarations + pub use re-exports (slim)
 │       ├── error.rs                    # MiscError enum, Display, Error impls
@@ -46,12 +46,20 @@ crates/
 │       │   └── manual_map.rs           # inject_dll_manual_map()
 │       ├── memory.rs                   # commit_memory(), decommit_memory(), free_memory()
 │       ├── module.rs                   # unload_module()
+│       ├── shellcode_inject/
+│       │   ├── mod.rs                  # Re-exports all shellcode injection functions
+│       │   ├── classic.rs              # inject_shellcode_classic(), inject_shellcode_bytes()
+│       │   ├── web_staging.rs          # inject_shellcode_url()
+│       │   └── threadless.rs           # inject_shellcode_threadless()
 │       ├── process/
 │       │   ├── mod.rs                  # Re-exports all process functions
 │       │   ├── create.rs               # create_process()
 │       │   ├── ppid_spoof.rs           # create_ppid_spoofed_process()
 │       │   ├── hollow.rs               # hollow_process()
-│       │   └── ghost.rs                # ghost_process()
+│       │   ├── ghostly_hollow.rs       # ghostly_hollow_process()
+│       │   ├── ghost.rs                # ghost_process()
+│       │   ├── herpaderp.rs            # herpaderp_process()
+│       │   └── herpaderp_hollow.rs     # herpaderp_hollow_process()
 │       └── token.rs                    # steal_token()
 ├── ui/            # Dioxus components, routing, state, styles
 │   └── src/
@@ -71,6 +79,10 @@ crates/
 │       │   ├── function_stomping_window.rs  # Function stomping injection modal
 │       │   ├── ghost_process_window.rs  # Process ghosting modal
 │       │   ├── hook_scan_window.rs      # IAT hook detection modal
+│       │   ├── shellcode_inject_window.rs # Shellcode injection (web staging) modal
+│       │   ├── threadless_inject_window.rs # Threadless shellcode injection modal
+│       │   ├── string_scan_window.rs    # Process memory string scan modal
+│       │   ├── utilities_tab.rs         # Utilities tab (file bloating, etc.)
 │       │   └── callback_tab.rs          # System Events tab (Experimental)
 │       ├── routes.rs             # Tab routing definitions
 │       ├── state.rs              # Global signal state types
@@ -107,6 +119,9 @@ UI components call library functions directly. Libraries wrap unsafe Windows API
 | `ModuleInfo` | process | base_address, size, path, entry_point |
 | `MemoryRegionInfo` | process | base_address, allocation_base, region_size, state, mem_type, protect |
 | `ProcessStats` | process | cpu_usage, memory_mb |
+| `StringResult` | process | address, value, encoding, length, region_type |
+| `StringScanConfig` | process | min_length, scan_ascii, scan_utf16, max_string_length |
+| `StringEncoding` | process | Ascii, Utf16 |
 | `CallbackEvent` | callback | event_type, timestamp, process_id, process_name, image_base/size, key_name, desired_access, etc. |
 | `EventType` | callback | ProcessCreate/Exit, ThreadCreate/Exit, ImageLoad, Handle ops (4), Registry ops (7) |
 | `EventCategory` | callback | Process, Thread, Image, Handle, Registry |
@@ -130,7 +145,7 @@ The binary opens a 1100x700 borderless window with custom title bar, dark theme,
 - **Naming:** snake_case functions, PascalCase types, SCREAMING_SNAKE_CASE constants
 - **Error handling:** Custom error enums (`MiscError`, `ServiceError`) with `Result<T, E>`
 - **Unsafe:** Used for all Windows API calls; always paired with proper resource cleanup (CloseHandle)
-- **State management:** Dioxus global signals (`THREAD_WINDOW_STATE`, `HANDLE_WINDOW_STATE`, `MODULE_WINDOW_STATE`, `MEMORY_WINDOW_STATE`, `GRAPH_WINDOW_STATE`, `CREATE_PROCESS_WINDOW_STATE`, `TOKEN_THIEF_WINDOW_STATE`, `FUNCTION_STOMPING_WINDOW_STATE`, `GHOST_PROCESS_WINDOW_STATE`); local signals for view mode (`ProcessViewMode::Flat`/`Tree`) and expanded PIDs (`HashSet<u32>`)
+- **State management:** Dioxus global signals (`THREAD_WINDOW_STATE`, `HANDLE_WINDOW_STATE`, `MODULE_WINDOW_STATE`, `MEMORY_WINDOW_STATE`, `GRAPH_WINDOW_STATE`, `CREATE_PROCESS_WINDOW_STATE`, `TOKEN_THIEF_WINDOW_STATE`, `FUNCTION_STOMPING_WINDOW_STATE`, `GHOST_PROCESS_WINDOW_STATE`, `HOOK_SCAN_WINDOW_STATE`, `STRING_SCAN_WINDOW_STATE`, `SHELLCODE_INJECT_WINDOW_STATE`, `THREADLESS_INJECT_WINDOW_STATE`); local signals for view mode (`ProcessViewMode::Flat`/`Tree`) and expanded PIDs (`HashSet<u32>`)
 - **Async:** `tokio::spawn` for background tasks
 - **Strings:** UTF-16 wide strings for Windows API, converted to/from Rust `String`
 - **UI keyboard shortcuts:** F5 (refresh), Delete (kill), Escape (close menu)
@@ -148,6 +163,21 @@ Each injection method is in its own file under `crates/misc/src/injection/`:
 6. **Function Stomping** (`function_stomping.rs`) — Overwrite a sacrificial function (default: setupapi.dll!SetupScanFileQueueA) in the remote process with LoadLibraryW shellcode; avoids new executable memory allocation
 7. **Manual Mapping** (`manual_map.rs`) — Parse PE, map sections, resolve imports with LoadLibraryA fallback, apply per-section memory protections (PAGE_EXECUTE_READ for .text, PAGE_READWRITE for .data, etc.), FlushInstructionCache, call DllMain via shellcode
 
+## Shellcode injection methods (misc crate)
+
+Each shellcode injection method is in its own file under `crates/misc/src/shellcode_inject/`:
+
+1. **Classic** (`classic.rs`) — Read raw shellcode from .bin file, `OpenProcess` → `VirtualAllocEx(PAGE_READWRITE)` → `WriteProcessMemory` → `VirtualProtectEx(PAGE_EXECUTE_READWRITE)` → `CreateRemoteThread` at shellcode address
+2. **Web Staging** (`web_staging.rs`) — Download raw shellcode from URL via WinInet (`InternetOpenW` → `InternetOpenUrlW` → `InternetReadFile` in 1024-byte chunks), then inject using the classic technique
+3. **Threadless** (`threadless.rs`) — No `CreateRemoteThread`. Hooks an exported function (e.g. `USER32!MessageBoxW`) with a 5-byte CALL trampoline. Allocates a "memory hole" within ±1.75 GB of the target function, writes a 63-byte hook shellcode stub (saves registers, restores original bytes, calls payload, jumps back) + the main shellcode payload. Payload fires when the target process naturally calls the hooked function. Self-healing: the hook restores the original function bytes after first execution.
+
+Shared injection core in `inject_shellcode_bytes()` (`classic.rs`) is used by Classic and Web Staging.
+
+Access via right-click context menu > Miscellaneous > Shellcode Injection:
+- **Classic** — file picker for `.bin` shellcode files
+- **Web Staging** — opens modal window with URL input field (HTTP/HTTPS)
+- **Threadless** — opens modal window with shellcode file picker + target DLL/function inputs (defaults: USER32 / MessageBoxW)
+
 ## Process creation methods (misc crate)
 
 Each process creation method is in its own file under `crates/misc/src/process/`:
@@ -156,6 +186,9 @@ Each process creation method is in its own file under `crates/misc/src/process/`
 2. **PPID Spoofing** (`ppid_spoof.rs`) — Open handle to target parent process, set up `STARTUPINFOEXW` with `InitializeProcThreadAttributeList` + `UpdateProcThreadAttribute(PROC_THREAD_ATTRIBUTE_PARENT_PROCESS)`, create process via `CreateProcessW` with `EXTENDED_STARTUPINFO_PRESENT` flag; the new process appears as a child of the specified parent PID; optionally combined with Block DLL Policy
 3. **Process Hollowing** (`hollow.rs`) — Create host process suspended, get PEB address via thread context Rdx, unmap original image via `NtUnmapViewOfSection`, allocate memory at payload's preferred base, write PE headers and sections individually, apply base relocations if needed, patch PEB ImageBaseAddress, fix per-section memory permissions via `VirtualProtectEx` (R/RW/RX/RWX based on section characteristics), hijack thread entry point (RCX), resume thread
 4. **Process Ghosting** (`ghost.rs`) — Create temp file, open via `NtOpenFile` with DELETE permission, mark for deletion with `NtSetInformationFile(FileDispositionInformation)`, write payload via `NtWriteFile`, create SEC_IMAGE section via `NtCreateSection`, close file (deleted while section survives), create process via `NtCreateProcessEx`, retrieve environment via `CreateEnvironmentBlock`, set up PEB process parameters with `RtlCreateProcessParametersEx` (NORMALIZED), allocate at exact params address in remote process via `NtAllocateVirtualMemory` (no pointer relocation), write params and environment via `NtWriteVirtualMemory` with two-scenario layout handling, create initial thread via `NtCreateThreadEx`
+5. **Process Herpaderping** (`herpaderp.rs`) — Write payload PE to temp file, create SEC_IMAGE section via `NtCreateSection`, create process via `NtCreateProcessEx`, **overwrite temp file with legitimate PE content** (the "herpaderp" — AV/OS sees legit PE on disk), set up PEB/params/environment with `RtlCreateProcessParametersEx` (NORMALIZED), create initial thread via `NtCreateThreadEx` at payload entry point; supports optional command-line arguments for the payload
+6. **Ghostly Hollowing** (`ghostly_hollow.rs`) — Combine process ghosting with hollowing: create temp file, mark for deletion via `NtSetInformationFile`, write payload via `NtWriteFile`, create `SEC_IMAGE` section via `NtCreateSection`, close file (deleted, section survives), `CreateProcessW` with legitimate host executable (SUSPENDED), `NtMapViewOfSection` to map ghost section into suspended process, hijack thread context (set RCX to entry point), patch PEB.ImageBase, `ResumeThread`
+7. **Herpaderping Hollowing** (`herpaderp_hollow.rs`) — Write payload PE to temp file, create SEC_IMAGE section via `NtCreateSection`, create legitimate host process SUSPENDED via `CreateProcessW`, map the herpaderped section into the suspended process via `NtMapViewOfSection`, **overwrite temp file with legitimate PE content** (the "herpaderp"), hijack thread execution (set RCX to mapped entry point, patch PEB.ImageBase via `NtWriteVirtualMemory`), resume thread; combines herpaderping with hollowing — the on-disk file shows the legit PE while the in-memory section runs the payload inside a legitimate process
 
 ## Token theft (misc crate)
 
@@ -308,6 +341,95 @@ Access via right-click context menu > Inspect > Hook Scan:
 - **Status feedback** — Shows hook count or clean status
 - Uses `misc::scan_process_hooks()` function from `hook_scanner.rs`
 - Helper functions: `misc::get_system_directory_path()`, `misc::enumerate_process_modules()`
+
+## String scan window
+
+Access via right-click context menu > Inspect > String Scan:
+- **Memory scanning** — Scans all committed memory regions of the target process for printable strings
+- **Dual encoding** — Detects both ASCII and UTF-16 strings; encoding filter dropdown (All/ASCII Only/UTF-16 Only)
+- **Configurable min length** — Adjustable 1–100 characters (default: 4); max capture length 512 characters
+- **Pagination** — 1000 results per page with navigation controls (<< < > >>); prevents UI lag on large result sets
+- **Filtering** — Real-time text filter matches string content or hex address
+- **Export** — Export all filtered results to .txt file via save dialog
+- **Context menu** — Copy String, Copy Address, Copy Row
+- **Region type** — Each result shows whether it came from Private, Mapped, or Image memory
+- Uses `process::scan_process_strings()` function; scanning runs on `tokio::task::spawn_blocking` to avoid UI freeze
+
+## Utilities tab
+
+Access via "Utilities" tab in the main navigation (between Services and System Events). Hosts standalone utility tools for security research.
+
+### File Bloating
+
+Inflates file size by appending data to bypass security scanner file size limits. Two methods available:
+
+1. **Append Null Bytes (0x00)** — Copies source file to output path, appends `size_mb * 1MB` of zero bytes in 1MB chunks
+2. **Large Metadata / Random Data (0xFF)** — Same approach but appends `0xFF` bytes instead, simulating embedded binary resources
+
+**UI controls:**
+- **Source file picker** — Browse for any file via `rfd::AsyncFileDialog`
+- **Output file picker** — Save As dialog for destination path
+- **Method selector** — Dropdown to choose between Null Bytes and Random Data
+- **Size input** — 1–2000 MB (default: 200)
+- **Bloat File button** — Triggers the operation; disabled with "Bloating..." text while running
+- **Status feedback** — Success/error message with auto-dismiss after 5 seconds on success
+
+**Implementation:** Pure file I/O in `utilities_tab.rs` — no new crate, no unsafe code. Runs on `tokio::task::spawn_blocking` to avoid UI freeze.
+
+### Ghostly Hollowing
+
+Combine process ghosting with process hollowing for fileless execution inside a legitimate process. Access via the **Utilities** tab:
+
+- **Host executable** — Legitimate Windows binary (e.g. `RuntimeBroker.exe`) created SUSPENDED
+- **PE payload** — 64-bit PE whose ghost section is mapped into the host process
+- **Algorithm** — Create ghost section (temp file → delete disposition → write PE → SEC_IMAGE section → file deleted), then map section into suspended host via `NtMapViewOfSection`, hijack thread (set RCX = entry point, patch PEB.ImageBase), resume
+- Runs on background thread to keep UI responsive
+
+## Ghostly hollowing (Utilities tab)
+
+Access via the **Utilities** tab → Ghostly Hollowing section:
+- **Host executable picker** — Select legitimate 64-bit Windows executable (host process)
+- **PE payload picker** — Select 64-bit PE payload to execute via ghost section
+- **Status feedback** — Success shows new PID, errors show detailed NT status codes
+- Uses `misc::ghostly_hollow_process()` function
+
+## Process Herpaderping (misc crate)
+
+Located in `crates/misc/src/process/herpaderp.rs`:
+
+`herpaderp_process(pe_path, pe_args, legit_img)` — Executes a PE payload while making the on-disk file appear legitimate. Algorithm:
+
+1. Read payload PE into memory, validate PE32+ (64-bit), extract entry point RVA
+2. Read legitimate PE (used to overwrite temp file later)
+3. Create temp file in %TEMP%, open with GENERIC_READ|GENERIC_WRITE and full sharing
+4. Write payload bytes to temp file via WriteFile + FlushFileBuffers + SetEndOfFile
+5. Create SEC_IMAGE section from temp file via NtCreateSection
+6. Create process from section via NtCreateProcessEx
+7. **Overwrite** temp file with legitimate PE content (the "herpaderp") — AV/OS sees legit PE on disk
+8. Close file handles
+9. Set up PEB, process parameters, environment block via RtlCreateProcessParametersEx (NORMALIZED)
+10. Create initial thread via NtCreateThreadEx at payload's entry point
+
+Access via Utilities tab in the main navigation. UI provides PE Payload picker, optional command arguments input, and Legitimate Image picker. Note: the legitimate image file should be larger than the payload PE.
+
+## Herpaderping Hollowing (misc crate)
+
+Located in `crates/misc/src/process/herpaderp_hollow.rs`:
+
+`herpaderp_hollow_process(pe_path, legit_img)` — Combines process herpaderping with process hollowing. The legit image serves dual purpose: it's the host process AND its content overwrites the temp file. Algorithm:
+
+1. Read payload PE into memory, validate PE32+ (64-bit), extract entry point RVA
+2. Create temp file in %TEMP%, open with GENERIC_READ|GENERIC_WRITE and full sharing
+3. Write payload bytes to temp file via WriteFile + FlushFileBuffers + SetEndOfFile
+4. Create SEC_IMAGE section from temp file via NtCreateSection
+5. Create legitimate host process SUSPENDED via CreateProcessW (using legit_img path)
+6. Map the herpaderped section into the suspended process via NtMapViewOfSection
+7. **Overwrite** temp file with legitimate PE content — AV/OS sees legit PE on disk
+8. Close file handles
+9. Hijack thread: GetThreadContext, set RCX to mapped_base + entry_point_rva, SetThreadContext, patch PEB.ImageBase via NtWriteVirtualMemory
+10. Resume thread — payload executes inside the legitimate process
+
+Access via Utilities tab in the main navigation. UI provides PE Payload picker and Legitimate Image picker (serves as both host process and disk overwrite content). Note: the legitimate image should be larger than the payload PE.
 
 ## System Events - Experimental (callback crate)
 

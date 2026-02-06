@@ -42,6 +42,12 @@ pub enum MiscError {
     GhostSetupFailed(String),
     PPidSpoofFailed(String),
     HookScanFailed(String),
+    VirtualProtectFailed,
+    WebStagingFailed(String),
+    ThreadlessInjectFailed(String),
+    GhostlyHollowFailed(String),
+    HerpaderpFailed(String),
+    HerpaderpHollowFailed(String),
 }
 
 impl fmt::Display for MiscError {
@@ -96,6 +102,12 @@ impl fmt::Display for MiscError {
             MiscError::GhostSetupFailed(msg) => write!(f, "Ghost process setup failed: {}", msg),
             MiscError::PPidSpoofFailed(msg) => write!(f, "PPID spoofing failed: {}", msg),
             MiscError::HookScanFailed(msg) => write!(f, "Hook scan failed: {}", msg),
+            MiscError::VirtualProtectFailed => write!(f, "VirtualProtectEx failed to set memory protection"),
+            MiscError::WebStagingFailed(msg) => write!(f, "Web staging failed: {}", msg),
+            MiscError::ThreadlessInjectFailed(msg) => write!(f, "Threadless injection failed: {}", msg),
+            MiscError::GhostlyHollowFailed(msg) => write!(f, "Ghostly hollowing failed: {}", msg),
+            MiscError::HerpaderpFailed(msg) => write!(f, "Process herpaderping failed: {}", msg),
+            MiscError::HerpaderpHollowFailed(msg) => write!(f, "Herpaderping hollowing failed: {}", msg),
         }
     }
 }
