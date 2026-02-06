@@ -146,7 +146,7 @@ fn to_wide(s: &str) -> Vec<u16> {
         .collect()
 }
 
-/// Enumerate all Win32 services
+/// Enumerate all services (Win32 + kernel/filesystem drivers)
 pub fn get_services() -> Vec<ServiceInfo> {
     let mut services = Vec::new();
 
@@ -166,10 +166,12 @@ pub fn get_services() -> Vec<ServiceInfo> {
         let mut services_returned: u32 = 0;
         let mut resume_handle: u32 = 0;
 
+        let service_type_filter = SERVICE_WIN32 | SERVICE_DRIVER;
+
         let _ = EnumServicesStatusExW(
             sc_manager,
             SC_ENUM_PROCESS_INFO,
-            SERVICE_WIN32,
+            service_type_filter,
             SERVICE_STATE_ALL,
             None,
             &mut bytes_needed,
@@ -189,7 +191,7 @@ pub fn get_services() -> Vec<ServiceInfo> {
         let result = EnumServicesStatusExW(
             sc_manager,
             SC_ENUM_PROCESS_INFO,
-            SERVICE_WIN32,
+            service_type_filter,
             SERVICE_STATE_ALL,
             Some(&mut buffer),
             &mut bytes_needed,
@@ -414,6 +416,7 @@ pub fn create_service(
     display_name: &str,
     binary_path: &str,
     start_type: ServiceStartType,
+    is_kernel_driver: bool,
 ) -> bool {
     unsafe {
         let sc_manager = match OpenSCManagerW(
@@ -433,7 +436,15 @@ pub fn create_service(
             ServiceStartType::Auto => SERVICE_AUTO_START,
             ServiceStartType::Manual => SERVICE_DEMAND_START,
             ServiceStartType::Disabled => SERVICE_DISABLED,
+            ServiceStartType::Boot => SERVICE_BOOT_START,
+            ServiceStartType::System => SERVICE_SYSTEM_START,
             _ => SERVICE_DEMAND_START,
+        };
+
+        let service_type = if is_kernel_driver {
+            SERVICE_KERNEL_DRIVER
+        } else {
+            SERVICE_WIN32_OWN_PROCESS
         };
 
         let result = CreateServiceW(
@@ -441,7 +452,7 @@ pub fn create_service(
             PCWSTR(wide_name.as_ptr()),
             PCWSTR(wide_display.as_ptr()),
             SERVICE_ALL_ACCESS,
-            SERVICE_WIN32_OWN_PROCESS,
+            service_type,
             win_start_type,
             SERVICE_ERROR_NORMAL,
             PCWSTR(wide_path.as_ptr()),

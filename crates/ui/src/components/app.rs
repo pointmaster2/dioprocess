@@ -64,10 +64,6 @@ pub fn Layout() -> Element {
                 div { class: "title-bar",
                     div {
                         class: "title-bar-drag",
-                        onmousedown: move |_| {
-                            let window = dioxus::desktop::window();
-                            let _ = window.drag_window();
-                        },
                         span { class: "title-text", "🖥️ DioProcess | Windows System Monitor Tool v{version}" }
                     }
                     div { class: "title-bar-buttons",
