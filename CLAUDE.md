@@ -2,7 +2,7 @@
 
 ## What is this project?
 
-DioProcess is a Windows desktop system monitoring and process management tool built with **Rust** and **Dioxus 0.6**. It provides real-time process, network, and service monitoring with advanced capabilities like DLL injection, thread control, and handle inspection. Requires administrator privileges (UAC manifest embedded at build time).
+DioProcess is a Windows desktop system monitoring and process management tool built with **Rust** and **Dioxus 0.6**. It provides real-time process, network, and service monitoring with advanced capabilities like DLL injection, thread control, handle inspection, and kernel-level security research features (process protection manipulation, token privilege escalation). Requires administrator privileges (UAC manifest embedded at build time).
 
 ## Tech stack
 
@@ -22,17 +22,19 @@ crates/
 ├── process/       # Process enumeration, threads, handles, modules, CPU/memory, string scanning
 ├── network/       # TCP/UDP connection enumeration via Windows IP Helper API
 ├── service/       # Windows Service Control Manager ops (enum, start, stop, create, delete)
-├── callback/      # Kernel driver communication + SQLite event storage
+├── callback/      # Kernel driver communication + SQLite event storage + security research IOCTLs
 │   └── src/
-│       ├── lib.rs     # Module declarations + pub use re-exports
-│       ├── error.rs   # CallbackError enum
-│       ├── types.rs   # CallbackEvent, EventType, EventCategory, RegistryOperation
-│       ├── driver.rs  # Driver communication (is_driver_loaded, read_events)
-│       └── storage.rs # SQLite persistence (EventStorage, EventFilter, batched writes)
-├── misc/          # DLL injection (7 methods), DLL unhooking, hook detection, process creation, process hollowing, ghostly hollowing, process herpaderping, herpaderping hollowing, token theft, module unloading, memory ops
+│       ├── lib.rs         # Module declarations + pub use re-exports
+│       ├── error.rs       # CallbackError enum
+│       ├── types.rs       # CallbackEvent, EventType, EventCategory, RegistryOperation
+│       ├── driver.rs      # Driver communication (is_driver_loaded, read_events, protect/unprotect, enable_privileges, clear_debug_flags, callback enumeration)
+│       ├── pspcidtable.rs # PspCidTable enumeration (CidEntry, CidObjectType, enumerate_pspcidtable)
+│       └── storage.rs     # SQLite persistence (EventStorage, EventFilter, batched writes)
+├── misc/          # DLL injection (7 methods), DLL unhooking, hook detection, kernel injection, process creation, process hollowing, ghostly hollowing, process herpaderping, herpaderping hollowing, token theft, module unloading, memory ops
 │   └── src/
 │       ├── lib.rs                      # Module declarations + pub use re-exports (slim)
 │       ├── error.rs                    # MiscError enum, Display, Error impls
+│       ├── kernel_inject.rs            # Kernel shellcode/DLL injection via RtlCreateUserThread
 │       ├── unhook.rs                   # DLL unhooking (restore .text from disk)
 │       ├── hook_scanner.rs             # IAT hook detection (E9/E8/EB/FF25/MOV+JMP patterns)
 │       ├── injection/
@@ -61,10 +63,10 @@ crates/
 │       │   ├── herpaderp.rs            # herpaderp_process()
 │       │   └── herpaderp_hollow.rs     # herpaderp_hollow_process()
 │       └── token.rs                    # steal_token()
-├── ui/            # Dioxus components, routing, state, styles
+├── ui/            # Dioxus components, routing, state, styles, config
 │   └── src/
 │       ├── components/
-│       │   ├── app.rs            # Main app + router layout
+│       │   ├── app.rs            # Main app + router layout + theme selector
 │       │   ├── process_tab.rs    # Process monitoring tab
 │       │   ├── network_tab.rs    # Network connections tab
 │       │   ├── service_tab.rs    # Service management tab
@@ -82,12 +84,14 @@ crates/
 │       │   ├── shellcode_inject_window.rs # Shellcode injection (web staging) modal
 │       │   ├── threadless_inject_window.rs # Threadless shellcode injection modal
 │       │   ├── string_scan_window.rs    # Process memory string scan modal
-│       │   ├── utilities_tab.rs         # Utilities tab (file bloating, etc.)
+│       │   ├── utilities_tab.rs         # Usermode Utilities tab (file bloating, etc.)
+│       │   ├── kernel_utilities_tab.rs  # Kernel Utilities tab (callback enum, PspCidTable)
 │       │   └── callback_tab.rs          # System Events tab (Experimental)
+│       ├── config.rs             # Theme enum, AppConfig, SQLite config storage
 │       ├── routes.rs             # Tab routing definitions
 │       ├── state.rs              # Global signal state types
 │       ├── helpers.rs            # Clipboard utilities
-│       └── styles.rs             # Embedded CSS (dark theme)
+│       └── styles.rs             # CSS themes (Aura Glow, Cyber) with CSS variables
 └── dioprocess/    # Binary entry point, window config, manifest embedding
     ├── src/main.rs
     ├── build.rs        # Embeds app.manifest via embed-resource
@@ -129,6 +133,15 @@ UI components call library functions directly. Libraries wrap unsafe Windows API
 | `EventFilter` | callback | event_type, category, process_id, search (for DB queries) |
 | `NetworkConnection` | network | protocol, local/remote addr:port, state, pid |
 | `ServiceInfo` | service | name, display_name, status, start_type, binary_path, description, pid |
+| `Theme` | ui | AuraGlow (default), Cyber |
+| `AppConfig` | ui | theme |
+| `ConfigStorage` | ui | SQLite wrapper for app settings |
+| `CallbackInfo` | callback | index, callback_address, module_name |
+| `ObjectCallbackInfo` | callback | module_name, altitude, pre_operation_callback, post_operation_callback, object_type, operations, index |
+| `ObjectCallbackType` | callback | Process, Thread |
+| `ObjectCallbackOperations` | callback | handle_create, handle_duplicate |
+| `CidEntry` | callback | id, object_address, object_type, parent_pid, process_name |
+| `CidObjectType` | callback | Process, Thread |
 
 ## Build & run
 
@@ -138,7 +151,38 @@ cargo run                # Run debug (needs admin)
 cargo build --release    # Release build
 ```
 
-The binary opens a 1100x700 borderless window with custom title bar, dark theme, and disabled context menu.
+The binary opens a 1100x700 borderless window with custom title bar and disabled context menu.
+
+## Theme system
+
+The app supports multiple UI themes with persistent preference storage.
+
+### Available themes
+
+| Theme | Description | Accent Color |
+|-------|-------------|--------------|
+| **Aura Glow** (default) | Dark background with purple/violet accents and glowing white text | `#8b5cf6` (violet) |
+| **Cyber** | Original cyan/teal theme | `#22d3ee` (cyan) |
+
+### Implementation
+
+Located in `crates/ui/src/`:
+- **`config.rs`** — `Theme` enum, `AppConfig` struct, `ConfigStorage` for SQLite persistence
+- **`styles.rs`** — CSS variables per theme (`AURA_GLOW_VARS`, `CYBER_VARS`) + shared `BASE_STYLES`
+
+**Theme enum:**
+```rust
+pub enum Theme {
+    AuraGlow,  // Default - dark with violet glow
+    Cyber,     // Original cyan theme
+}
+```
+
+**CSS variable approach:** Each theme defines `:root` CSS variables (colors, gradients, shadows). The `BASE_STYLES` const uses these variables, allowing runtime theme switching without duplicating CSS.
+
+**Storage:** Theme preference saved to `%LOCALAPPDATA%\DioProcess\config.db` (separate from `events.db`)
+
+**UI:** Theme selector dropdown in the title bar, immediately saves preference on change.
 
 ## Conventions
 
@@ -195,6 +239,234 @@ Each process creation method is in its own file under `crates/misc/src/process/`
 Located in `crates/misc/src/token.rs`:
 
 `steal_token(pid, exe_path, args)` — Open target process with `PROCESS_QUERY_LIMITED_INFORMATION`, obtain its primary token via `OpenProcessToken`, duplicate as a primary token with `DuplicateTokenEx(SecurityAnonymous, TokenPrimary)`, enable `SeAssignPrimaryTokenPrivilege` via `AdjustTokenPrivileges`, impersonate with `ImpersonateLoggedOnUser`, spawn a new process under that token via `CreateProcessAsUserW`, then `RevertToSelf`. Access via right-click context menu > Miscellaneous > Steal Token.
+
+## Security Research Features (callback crate + kernel driver)
+
+**Requires DioProcess kernel driver to be loaded.** Three offensive capabilities via direct kernel structure manipulation:
+
+### 1. Process Protection Manipulation
+
+**Functions:**
+- `callback::protect_process(pid: u32) -> Result<(), CallbackError>` — Apply PPL protection
+- `callback::unprotect_process(pid: u32) -> Result<(), CallbackError>` — Remove PPL protection
+
+**Implementation:**
+Located in `kernelmode/DioProcess/DioProcessDriver/DioProcessDriver.cpp` (IOCTL handlers) and `crates/callback/src/driver.rs` (Rust bindings).
+
+**Algorithm (Protect):**
+1. Call `GetWindowsVersion()` to detect current Windows build (10240-26100)
+2. `PsLookupProcessByProcessId()` to get `EPROCESS` pointer from PID
+3. Calculate protection structure address: `EPROCESS + PROCESS_PROTECTION_OFFSET[version]`
+4. Write protection values to `_EPROCESS.Protection` structure:
+   - `SignatureLevel = 0x3E` (SE_SIGNING_LEVEL_WINDOWS_TCB)
+   - `SectionSignatureLevel = 0x3C` (SE_SIGNING_LEVEL_WINDOWS)
+   - `Protection.Type = 2` (PsProtectedTypeProtectedLight)
+   - `Protection.Signer = 6` (PsProtectedSignerWinTcb)
+5. `ObDereferenceObject(eProcess)`
+
+**Algorithm (Unprotect):**
+Same as above, but zero out all protection fields instead of setting them.
+
+**Structure Offsets:**
+```cpp
+// PROCESS_PROTECTION_OFFSET array (indexed by WINDOWS_VERSION)
+Win 10 1809 (17763):  0x6ca
+Win 10 2004 (19041):  0x87a
+Win 11 21H2 (22000):  0x87a
+Win 11 22H2 (22621):  0x87a
+Win 11 23H2 (22631):  0x87a
+Win 11 24H2 (26100):  0x87a (⚠️ needs verification)
+```
+
+**Use Cases:**
+- Protect benign processes from termination/injection
+- Remove protection from protected processes (lsass.exe, AV, etc.) for research
+- Test PPL bypass techniques
+
+**UI Access:**
+Right-click process → Miscellaneous → **🛡️ Protect Process** / **🔓 Unprotect Process**
+(Buttons disabled/grayed when driver not loaded)
+
+### 2. Kernel Injection (shellcode + DLL)
+
+**Functions:**
+- `misc::kernel_inject_shellcode(pid: u32, shellcode: &[u8]) -> Result<u64, MiscError>` — Inject shellcode from kernel mode
+- `misc::kernel_inject_dll(pid: u32, dll_path: &str) -> Result<(u64, u64), MiscError>` — Inject DLL from kernel mode
+
+**Implementation:**
+Located in `kernelmode/DioProcess/DioProcessDriver/DioProcessDriver.cpp` (kernel functions) and `crates/misc/src/kernel_inject.rs` (Rust bindings).
+
+**Algorithm (Shellcode):**
+1. Dynamically resolve `RtlCreateUserThread` via `MmGetSystemRoutineAddress`
+2. `PsLookupProcessByProcessId()` to get `EPROCESS` pointer
+3. `KeStackAttachProcess()` to attach to target process context
+4. `ZwAllocateVirtualMemory()` to allocate RWX memory in target
+5. `RtlCopyMemory()` to write shellcode bytes
+6. `RtlCreateUserThread(process, NULL, FALSE, 0, 0, 0, shellcode_addr, NULL, &hThread, NULL)`
+7. `ZwClose(hThread)`, `KeUnstackDetachProcess()`, `ObDereferenceObject()`
+
+**Algorithm (DLL):**
+1. Resolve `RtlCreateUserThread` dynamically
+2. Get `LoadLibraryW` address in target process:
+   - Get PEB via `PROCESS_PEB_OFFSET[GetWindowsVersion()]`
+   - Walk `PEB->Ldr->InLoadOrderModuleList` to find `kernel32.dll`
+   - Parse PE export directory to find `LoadLibraryW`
+3. Attach to target process
+4. Allocate memory for wide-char DLL path
+5. Write DLL path via `RtlCopyMemory`
+6. `RtlCreateUserThread(process, NULL, FALSE, 0, 0, 0, LoadLibraryW_addr, dll_path_addr, &hThread, NULL)`
+7. Cleanup
+
+**IOCTLs:**
+```cpp
+IOCTL_DIOPROCESS_KERNEL_INJECT_SHELLCODE  // 0x00222030
+IOCTL_DIOPROCESS_KERNEL_INJECT_DLL        // 0x00222034
+```
+
+**UI Access:**
+Right-click process → Miscellaneous → **Kernel Injection** → Shellcode Injection / DLL Injection
+(Submenu disabled/grayed when driver not loaded)
+
+### 3. Token Privilege Escalation
+
+**Function:**
+- `callback::enable_all_privileges(pid: u32) -> Result<(), CallbackError>` — Enable all Windows privileges
+
+**Implementation:**
+Located in `kernelmode/DioProcess/DioProcessDriver/DioProcessDriver.cpp` (IOCTL handler) and `crates/callback/src/driver.rs` (Rust binding).
+
+**Algorithm:**
+1. Call `GetWindowsVersion()` to detect current Windows build
+2. `PsLookupProcessByProcessId()` to get `EPROCESS` pointer from PID
+3. `PsReferencePrimaryToken(eProcess)` to get `TOKEN` pointer
+4. Calculate privilege structure address: `TOKEN + PROCESS_PRIVILEGE_OFFSET[version]` (usually 0x40)
+5. Set all privilege bitmasks to 0xFF:
+   ```cpp
+   tokenPrivs->Present[0-4] = 0xff;
+   tokenPrivs->Enabled[0-4] = 0xff;
+   tokenPrivs->EnabledByDefault[0-4] = 0xff;
+   ```
+6. `PsDereferencePrimaryToken(pToken)` and `ObDereferenceObject(eProcess)`
+
+**Privileges Enabled (40 total):**
+- `SeDebugPrivilege` — Debug any process
+- `SeLoadDriverPrivilege` — Load kernel drivers
+- `SeTcbPrivilege` — Act as part of OS
+- `SeBackupPrivilege`, `SeRestorePrivilege`, `SeImpersonatePrivilege`
+- Plus 34 more Windows privileges
+
+**Structure Offset:**
+Token privilege offset is **0x40** across all Windows 10/11 versions (very stable).
+
+**Use Cases:**
+- Grant unrestricted access to a process without restarting it
+- Bypass privilege checks for security research
+- Test privilege escalation detection
+
+**UI Access:**
+Right-click process → Miscellaneous → **⚡ Enable All Privileges**
+(Button disabled/grayed when driver not loaded)
+
+### Driver Communication
+
+**IOCTLs (defined in DioProcessCommon.h):**
+```cpp
+IOCTL_DIOPROCESS_PROTECT_PROCESS      // 0x00222014
+IOCTL_DIOPROCESS_UNPROTECT_PROCESS    // 0x00222018
+IOCTL_DIOPROCESS_ENABLE_PRIVILEGES    // 0x0022201C
+```
+
+**Request Structure:**
+```cpp
+struct TargetProcessRequest {
+    ULONG ProcessId;  // Target PID
+};
+```
+
+**Error Handling:**
+- `STATUS_NOT_SUPPORTED` — Unsupported Windows version (< Win 10 or unrecognized build)
+- `STATUS_BUFFER_TOO_SMALL` — Invalid request size
+- `STATUS_INVALID_PARAMETER` — NULL request buffer
+- `PsLookupProcessByProcessId` failures return NTSTATUS error codes
+
+### Windows Version Support
+
+**Supported Versions:**
+- ✅ Windows 10: 1507 (10240) through 22H2 (19045)
+- ✅ Windows 11: 21H2 (22000) through 24H2 (26100)
+
+**Version Detection:**
+`GetWindowsVersion()` in `DioProcessDriver.cpp` uses `RtlGetVersion()` to get build number and maps to `WINDOWS_VERSION` enum. If build is unrecognized but >= 19041, uses Windows 10 2004 offsets as fallback.
+
+**Offset Verification:**
+See `tools/verify_offsets.md` for instructions on:
+- Testing offsets on your system via DbgView
+- Using WinDbg to find correct offsets: `dt nt!_EPROCESS`, `dt nt!_TOKEN`
+- Using Vergilius Project (online PDB browser)
+- Updating offset arrays if needed
+
+### PatchGuard / KPP Safety
+
+**These operations DO NOT trigger PatchGuard** because:
+- ✅ Data-only modifications to per-process/per-token structures
+- ✅ No kernel code patching
+- ✅ No SSDT/IDT/GDT modifications
+- ✅ No function hooking
+
+PatchGuard only cares about **code patches** and **critical kernel table modifications**. Direct writes to `_EPROCESS` and `_TOKEN` fields are pure data modifications and safe.
+
+### Debug Logging
+
+The driver logs all operations via `KdPrint()` for verification:
+```
+DioProcess: Windows Build: 10.0 (Build 26100)
+DioProcess: Protecting process PID 1234 (EPROCESS=0x..., Offset=0x87A)
+DioProcess: Current Protection: SigLvl=0x00, SectSigLvl=0x00, Type=0, Signer=0
+DioProcess: New Protection: SigLvl=0x3E, SectSigLvl=0x3C, Type=2, Signer=6
+DioProcess: Process PID 1234 protected successfully
+```
+
+Use **DbgView** (SysInternals) to capture debug output for verification.
+
+### 4. Clear Debug Flags (Anti-Anti-Debugging)
+
+**Function:**
+- `callback::clear_debug_flags(pid: u32) -> Result<(), CallbackError>` — Clear debugging indicators
+
+**Implementation:**
+Located in `kernelmode/DioProcess/DioProcessDriver/DioProcessDriver.cpp` (IOCTL handler) and `crates/callback/src/driver.rs` (Rust binding).
+
+**Algorithm:**
+1. `PsLookupProcessByProcessId()` to get `EPROCESS` pointer from PID
+2. Zero out `_EPROCESS.DebugPort` (removes kernel debugger detection)
+3. Get PEB address via `PROCESS_PEB_OFFSET[GetWindowsVersion()]`
+4. Zero out `PEB.BeingDebugged` (single byte flag)
+5. Zero out `PEB.NtGlobalFlag` (removes heap debug flags like FLG_HEAP_ENABLE_TAIL_CHECK)
+6. `ObDereferenceObject(eProcess)`
+
+**IOCTL:**
+```cpp
+IOCTL_DIOPROCESS_CLEAR_DEBUG_FLAGS  // 0x00222020
+```
+
+**Use Cases:**
+- Hide debugger presence from anti-debug checks
+- Bypass `IsDebuggerPresent()`, `NtQueryInformationProcess(ProcessDebugPort)`, heap-based checks
+- Security research and malware analysis
+
+**UI Access:**
+Right-click process → Miscellaneous → **🔍 Clear Debug Flags**
+(Button disabled/grayed when driver not loaded)
+
+### Security Notes
+
+⚠️ **These are offensive security research capabilities:**
+- Bypasses Windows process protection mechanisms
+- Grants arbitrary privileges without restrictions
+- Can be used to unprotect security products or system processes
+- **For authorized security research and testing only**
+- Requires administrator privileges + kernel driver loaded
+- Test on VM/non-production systems first
 
 ## DLL Unhooking (misc crate)
 
@@ -431,6 +703,112 @@ Located in `crates/misc/src/process/herpaderp_hollow.rs`:
 
 Access via Utilities tab in the main navigation. UI provides PE Payload picker and Legitimate Image picker (serves as both host process and disk overwrite content). Note: the legitimate image should be larger than the payload PE.
 
+## Kernel Utilities tab
+
+Access via "Kernel Utilities" tab in the main navigation. Hosts kernel-mode security research features requiring the DioProcess driver.
+
+### Callback Enumeration sub-tab
+
+Enumerate registered kernel callbacks (process, thread, image load, and object notifications):
+
+**Functions (callback crate):**
+- `callback::enumerate_process_callbacks() -> Result<Vec<CallbackInfo>, CallbackError>` — List `PsSetCreateProcessNotifyRoutineEx` callbacks
+- `callback::enumerate_thread_callbacks() -> Result<Vec<CallbackInfo>, CallbackError>` — List `PsSetCreateThreadNotifyRoutine` callbacks
+- `callback::enumerate_image_callbacks() -> Result<Vec<CallbackInfo>, CallbackError>` — List `PsSetLoadImageNotifyRoutine` callbacks
+- `callback::enumerate_object_callbacks() -> Result<Vec<ObjectCallbackInfo>, CallbackError>` — List `ObRegisterCallbacks` handle operation callbacks
+
+**CallbackInfo struct:**
+```rust
+pub struct CallbackInfo {
+    pub index: u32,            // Callback slot index (0-63)
+    pub callback_address: u64, // Kernel address of callback function
+    pub module_name: String,   // Driver module name (e.g., "ntoskrnl.exe", "WdFilter.sys")
+}
+```
+
+**ObjectCallbackInfo struct:**
+```rust
+pub struct ObjectCallbackInfo {
+    pub module_name: String,           // Driver that registered the callback
+    pub altitude: String,              // Callback altitude (priority)
+    pub pre_operation_callback: u64,   // Pre-operation callback address
+    pub post_operation_callback: u64,  // Post-operation callback address
+    pub object_type: ObjectCallbackType, // Process or Thread
+    pub operations: ObjectCallbackOperations, // Create, Duplicate, or both
+    pub index: u32,
+}
+```
+
+**IOCTLs:**
+```cpp
+IOCTL_DIOPROCESS_ENUM_PROCESS_CALLBACKS  // 0x00222024
+IOCTL_DIOPROCESS_ENUM_THREAD_CALLBACKS   // 0x00222028
+IOCTL_DIOPROCESS_ENUM_IMAGE_CALLBACKS    // 0x0022202C
+IOCTL_DIOPROCESS_ENUM_OBJECT_CALLBACKS   // 0x00222040
+```
+
+**UI Features:**
+- **Callback type selector** — Process, Thread, Image Load, or Object buttons
+- **Regular callback table** — Index, Callback Address (hex), Driver Module columns
+- **Object callback table** — Type (Process/Thread), Pre-Operation, Post-Operation, Module, Altitude, Operations columns
+- **Sorting** — Click column headers to sort ascending/descending
+- **Search filter** — Filter by module name, address, altitude, or type
+- **CSV export** — Export enumerated callbacks to CSV file
+- **Context menu** — Copy Index, Copy Address, Copy Module
+- **Keyboard shortcuts** — F5 (refresh), Escape (close menu)
+- **Driver status** — Green/red indicator showing driver availability
+
+**Use Cases:**
+- Identify EDR/AV callbacks for security research
+- Understand which drivers are monitoring process/thread/image events
+- Detect rootkits that register malicious callbacks
+- Find handle operation hooks (ObRegisterCallbacks) used by security products
+- Analyze callback altitudes to understand driver priority order
+
+### PspCidTable sub-tab
+
+Enumerate all processes and threads via the kernel's PspCidTable (CID handle table):
+
+**Function (callback crate):**
+- `callback::enumerate_pspcidtable() -> Result<Vec<CidEntry>, CallbackError>` — List all CID entries
+
+**CidEntry struct:**
+```rust
+pub struct CidEntry {
+    pub id: u32,                    // PID (for processes) or TID (for threads)
+    pub object_address: u64,        // EPROCESS or ETHREAD kernel address
+    pub object_type: CidObjectType, // Process or Thread
+    pub parent_pid: u32,            // Parent PID or owning process PID
+    pub process_name: [u8; 16],     // ImageFileName from EPROCESS
+}
+```
+
+**IOCTL:**
+```cpp
+IOCTL_DIOPROCESS_ENUM_PSPCIDTABLE  // 0x0022203C
+```
+
+**Implementation:**
+- Uses **signature scanning** to dynamically locate `PspCidTable` (no hardcoded offsets)
+- Walks the CID handle table to enumerate all entries
+- Returns EPROCESS/ETHREAD addresses directly from kernel structures
+- Read-only operation — **PatchGuard/KPP safe**
+
+**UI Features:**
+- **Type filter** — All, Processes, or Threads buttons
+- **CID table** — Type, ID, Process Name, Object Address (hex), Parent/Owner PID columns
+- **Sorting** — Click column headers to sort
+- **Search filter** — Filter by name, ID, address, or parent PID
+- **CSV export** — Export to pspcidtable.csv
+- **Context menu** — Copy ID, Copy Process Name, Copy Object Address, Copy Parent/Owner PID
+- **Color coding** — Green "Process" label, blue "Thread" label
+
+**Use Cases:**
+- Enumerate hidden processes (DKOM detection)
+- View raw EPROCESS/ETHREAD kernel addresses
+- Compare with ToolHelp32 to detect process hiding techniques
+- Security research and rootkit analysis
+
 ## System Events - Experimental (callback crate)
 
 Real-time monitoring of kernel callbacks via the DioProcess kernel driver. Captures process, thread, image load, handle operations, and registry events.
@@ -553,6 +931,21 @@ Access via "System Events" tab in the main navigation (marked as Experimental):
 - **Color coding** — Green (process create), red (process exit), blue (thread create), yellow (thread exit), purple (image load), pink (handle ops), cyan/orange (registry read/write)
 - **Context menu** — Copy PID, Copy Process Name, Copy Command Line, Filter by PID/Name
 
+### Driver Installation Requirements
+
+⚠️ **Before installing the kernel driver, you MUST:**
+
+1. **Disable Hyper-V:** `bcdedit /set hypervisorlaunchtype off` (reboot required)
+2. **Disable Secure Boot** in BIOS/UEFI settings
+3. **Disable Windows driver protections:**
+   - Disable Driver Signature Enforcement (test mode or boot options)
+   - Disable Vulnerable Driver Blocklist (Windows Security → Device Security → Core Isolation)
+   - Disable Memory Integrity / HVCI if enabled
+
+⚠️ **Use ONLY on test systems. You are responsible for any damage.**
+
+**Install Log:** Driver installation output is logged to `%LOCALAPPDATA%\DioProcess\install.log` for troubleshooting.
+
 ### Loading the driver
 
 ```batch
@@ -583,10 +976,26 @@ There is no test infrastructure. Development relies on manual testing through th
 
 ## Local storage
 
-The app uses SQLite for kernel callback event persistence:
+The app uses SQLite for persistent storage (two separate databases):
+
+### Event storage (`events.db`)
 - **Location:** `%LOCALAPPDATA%\DioProcess\events.db`
+- **Purpose:** Kernel callback event persistence
 - **Engine:** rusqlite 0.31 with bundled SQLite
 - **Mode:** WAL (Write-Ahead Logging) for concurrent access
 - **Retention:** Events older than 24 hours auto-deleted
+
+### Config storage (`config.db`)
+- **Location:** `%LOCALAPPDATA%\DioProcess\config.db`
+- **Purpose:** Application settings (theme preference, etc.)
+- **Engine:** rusqlite 0.31 with bundled SQLite
+- **Mode:** WAL mode
+- **Schema:** Simple key-value table (`config(key TEXT PRIMARY KEY, value INTEGER)`)
+
+### Install log (`install.log`)
+- **Location:** `%LOCALAPPDATA%\DioProcess\install.log`
+- **Purpose:** Driver installation output for troubleshooting
+- **Format:** Timestamped entries with exit code, stdout, and stderr
+- **Mode:** Append-only (preserves history of all install attempts)
 
 No external services, network connections, or cloud storage — fully self-contained.

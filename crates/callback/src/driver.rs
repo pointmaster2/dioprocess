@@ -22,6 +22,13 @@ const IOCTL_DIOPROCESS_STOP_COLLECTION: u32 = 0x00222004;
 const IOCTL_DIOPROCESS_GET_COLLECTION_STATE: u32 = 0x00222008;
 const IOCTL_DIOPROCESS_REGISTER_CALLBACKS: u32 = 0x0022200C;
 const IOCTL_DIOPROCESS_UNREGISTER_CALLBACKS: u32 = 0x00222010;
+const IOCTL_DIOPROCESS_PROTECT_PROCESS: u32 = 0x00222014;
+const IOCTL_DIOPROCESS_UNPROTECT_PROCESS: u32 = 0x00222018;
+const IOCTL_DIOPROCESS_ENABLE_PRIVILEGES: u32 = 0x0022201C;
+const IOCTL_DIOPROCESS_CLEAR_DEBUG_FLAGS: u32 = 0x00222020;
+const IOCTL_DIOPROCESS_ENUM_PROCESS_CALLBACKS: u32 = 0x00222024;
+const IOCTL_DIOPROCESS_ENUM_THREAD_CALLBACKS: u32 = 0x00222028;
+const IOCTL_DIOPROCESS_ENUM_IMAGE_CALLBACKS: u32 = 0x0022202C;
 
 /// Check if the ProcessMonitorEx driver is loaded
 pub fn is_driver_loaded() -> bool {
@@ -1098,5 +1105,741 @@ fn extract_process_name_from_cmdline(cmdline: &str) -> String {
         path[pos + 1..].to_string()
     } else {
         path.to_string()
+    }
+}
+
+// ============== Security Research Functions ==============
+
+/// Protect a process with PPL (Protected Process Light)
+/// Requires the DioProcess kernel driver to be loaded
+pub fn protect_process(pid: u32) -> Result<(), CallbackError> {
+    let handle = open_device()?;
+
+    unsafe {
+        let request = pid;
+        let mut bytes_returned: u32 = 0;
+
+        let result = DeviceIoControl(
+            handle,
+            IOCTL_DIOPROCESS_PROTECT_PROCESS,
+            Some(&request as *const _ as *const _),
+            std::mem::size_of::<u32>() as u32,
+            None,
+            0,
+            Some(&mut bytes_returned),
+            None,
+        );
+
+        let _ = CloseHandle(handle);
+
+        if result.is_err() {
+            let err = GetLastError();
+            return Err(CallbackError::IoctlFailed(err.0));
+        }
+    }
+
+    Ok(())
+}
+
+/// Remove protection from a protected process
+/// Requires the DioProcess kernel driver to be loaded
+pub fn unprotect_process(pid: u32) -> Result<(), CallbackError> {
+    let handle = open_device()?;
+
+    unsafe {
+        let request = pid;
+        let mut bytes_returned: u32 = 0;
+
+        let result = DeviceIoControl(
+            handle,
+            IOCTL_DIOPROCESS_UNPROTECT_PROCESS,
+            Some(&request as *const _ as *const _),
+            std::mem::size_of::<u32>() as u32,
+            None,
+            0,
+            Some(&mut bytes_returned),
+            None,
+        );
+
+        let _ = CloseHandle(handle);
+
+        if result.is_err() {
+            let err = GetLastError();
+            return Err(CallbackError::IoctlFailed(err.0));
+        }
+    }
+
+    Ok(())
+}
+
+/// Enable all privileges for a process token
+/// Requires the DioProcess kernel driver to be loaded
+pub fn enable_all_privileges(pid: u32) -> Result<(), CallbackError> {
+    let handle = open_device()?;
+
+    unsafe {
+        let request = pid;
+        let mut bytes_returned: u32 = 0;
+
+        let result = DeviceIoControl(
+            handle,
+            IOCTL_DIOPROCESS_ENABLE_PRIVILEGES,
+            Some(&request as *const _ as *const _),
+            std::mem::size_of::<u32>() as u32,
+            None,
+            0,
+            Some(&mut bytes_returned),
+            None,
+        );
+
+        let _ = CloseHandle(handle);
+
+        if result.is_err() {
+            let err = GetLastError();
+            return Err(CallbackError::IoctlFailed(err.0));
+        }
+    }
+
+    Ok(())
+}
+
+/// Clear anti-debug flags for a process (kernel-level)
+/// Clears DebugPort, PEB.BeingDebugged, and PEB.NtGlobalFlag
+/// Requires the DioProcess kernel driver to be loaded
+pub fn clear_debug_flags(pid: u32) -> Result<(), CallbackError> {
+    let handle = open_device()?;
+
+    unsafe {
+        let request = pid;
+        let mut bytes_returned: u32 = 0;
+
+        let result = DeviceIoControl(
+            handle,
+            IOCTL_DIOPROCESS_CLEAR_DEBUG_FLAGS,
+            Some(&request as *const _ as *const _),
+            std::mem::size_of::<u32>() as u32,
+            None,
+            0,
+            Some(&mut bytes_returned),
+            None,
+        );
+
+        let _ = CloseHandle(handle);
+
+        if result.is_err() {
+            let err = GetLastError();
+            return Err(CallbackError::IoctlFailed(err.0));
+        }
+    }
+
+    Ok(())
+}
+
+
+/// Information about a kernel callback
+#[derive(Debug, Clone)]
+pub struct CallbackInfo {
+    pub module_name: String,
+    pub callback_address: u64,
+    pub index: u32,
+}
+
+/// Enumerate registered process creation callbacks
+/// Returns a vector of active callbacks with their owning module names
+pub fn enumerate_process_callbacks() -> Result<Vec<CallbackInfo>, CallbackError> {
+    let handle = open_device()?;
+
+    const MAX_CALLBACKS: usize = 64;
+    const MAX_MODULE_NAME: usize = 256;
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct RawCallbackInfo {
+        module_name: [u8; MAX_MODULE_NAME],
+        callback_address: u64,
+        index: u32,
+    }
+
+    let mut buffer = vec![
+        RawCallbackInfo {
+            module_name: [0u8; MAX_MODULE_NAME],
+            callback_address: 0,
+            index: 0,
+        };
+        MAX_CALLBACKS
+    ];
+
+    unsafe {
+        let mut bytes_returned: u32 = 0;
+
+        let result = DeviceIoControl(
+            handle,
+            IOCTL_DIOPROCESS_ENUM_PROCESS_CALLBACKS,
+            None,
+            0,
+            Some(buffer.as_mut_ptr() as *mut _),
+            (std::mem::size_of::<RawCallbackInfo>() * MAX_CALLBACKS) as u32,
+            Some(&mut bytes_returned),
+            None,
+        );
+
+        let _ = CloseHandle(handle);
+
+        if result.is_err() {
+            let err = GetLastError();
+            return Err(CallbackError::IoctlFailed(err.0));
+        }
+    }
+
+    // Convert raw data to CallbackInfo, filtering out null entries
+    let mut callbacks = Vec::new();
+    for raw in buffer {
+        if raw.callback_address != 0 {
+            // Find null terminator in module_name
+            let name_len = raw
+                .module_name
+                .iter()
+                .position(|&b| b == 0)
+                .unwrap_or(MAX_MODULE_NAME);
+
+            let module_name = String::from_utf8_lossy(&raw.module_name[..name_len]).to_string();
+
+            callbacks.push(CallbackInfo {
+                module_name,
+                callback_address: raw.callback_address,
+                index: raw.index,
+            });
+        }
+    }
+
+    Ok(callbacks)
+}
+
+
+/// Enumerate registered thread creation callbacks
+pub fn enumerate_thread_callbacks() -> Result<Vec<CallbackInfo>, CallbackError> {
+    enumerate_callbacks_internal(IOCTL_DIOPROCESS_ENUM_THREAD_CALLBACKS)
+}
+
+/// Enumerate registered image load callbacks
+pub fn enumerate_image_callbacks() -> Result<Vec<CallbackInfo>, CallbackError> {
+    enumerate_callbacks_internal(IOCTL_DIOPROCESS_ENUM_IMAGE_CALLBACKS)
+}
+
+/// Internal helper for callback enumeration
+fn enumerate_callbacks_internal(ioctl_code: u32) -> Result<Vec<CallbackInfo>, CallbackError> {
+    let handle = open_device()?;
+
+    const MAX_CALLBACKS: usize = 64;
+    const MAX_MODULE_NAME: usize = 256;
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct RawCallbackInfo {
+        module_name: [u8; MAX_MODULE_NAME],
+        callback_address: u64,
+        index: u32,
+    }
+
+    let mut buffer = vec![
+        RawCallbackInfo {
+            module_name: [0u8; MAX_MODULE_NAME],
+            callback_address: 0,
+            index: 0,
+        };
+        MAX_CALLBACKS
+    ];
+
+    unsafe {
+        let mut bytes_returned: u32 = 0;
+
+        let result = DeviceIoControl(
+            handle,
+            ioctl_code,
+            None,
+            0,
+            Some(buffer.as_mut_ptr() as *mut _),
+            (std::mem::size_of::<RawCallbackInfo>() * MAX_CALLBACKS) as u32,
+            Some(&mut bytes_returned),
+            None,
+        );
+
+        let _ = CloseHandle(handle);
+
+        if result.is_err() {
+            let err = GetLastError();
+            return Err(CallbackError::IoctlFailed(err.0));
+        }
+    }
+
+    let mut callbacks = Vec::new();
+    for raw in buffer {
+        if raw.callback_address != 0 {
+            let name_len = raw
+                .module_name
+                .iter()
+                .position(|&b| b == 0)
+                .unwrap_or(MAX_MODULE_NAME);
+
+            let module_name = String::from_utf8_lossy(&raw.module_name[..name_len]).to_string();
+
+            callbacks.push(CallbackInfo {
+                module_name,
+                callback_address: raw.callback_address,
+                index: raw.index,
+            });
+        }
+    }
+
+    Ok(callbacks)
+}
+
+// ============== Object Callback Enumeration ==============
+
+const IOCTL_DIOPROCESS_ENUM_OBJECT_CALLBACKS: u32 = 0x00222040; // CTL_CODE(0x22, 0x810, 0, 0)
+
+/// Object type being monitored by the callback
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObjectCallbackType {
+    Process = 1,
+    Thread = 2,
+}
+
+impl ObjectCallbackType {
+    pub fn from_u8(value: u8) -> Option<Self> {
+        match value {
+            1 => Some(ObjectCallbackType::Process),
+            2 => Some(ObjectCallbackType::Thread),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ObjectCallbackType::Process => "Process",
+            ObjectCallbackType::Thread => "Thread",
+        }
+    }
+}
+
+/// Operations monitored by the callback
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ObjectCallbackOperations {
+    pub handle_create: bool,
+    pub handle_duplicate: bool,
+}
+
+impl ObjectCallbackOperations {
+    pub fn from_u32(value: u32) -> Self {
+        Self {
+            handle_create: (value & 1) != 0,
+            handle_duplicate: (value & 2) != 0,
+        }
+    }
+
+    pub fn as_string(&self) -> String {
+        let mut ops = Vec::new();
+        if self.handle_create {
+            ops.push("Create");
+        }
+        if self.handle_duplicate {
+            ops.push("Duplicate");
+        }
+        if ops.is_empty() {
+            "None".to_string()
+        } else {
+            ops.join(", ")
+        }
+    }
+}
+
+/// Information about an object callback (ObRegisterCallbacks)
+#[derive(Debug, Clone)]
+pub struct ObjectCallbackInfo {
+    pub module_name: String,
+    pub altitude: String,
+    pub pre_operation_callback: u64,
+    pub post_operation_callback: u64,
+    pub object_type: ObjectCallbackType,
+    pub operations: ObjectCallbackOperations,
+    pub index: u32,
+}
+
+/// Enumerate registered object callbacks (ObRegisterCallbacks)
+/// Returns callbacks for both Process and Thread object types
+pub fn enumerate_object_callbacks() -> Result<Vec<ObjectCallbackInfo>, CallbackError> {
+    let handle = open_device()?;
+
+    const MAX_ENTRIES: usize = 64;
+    const MAX_MODULE_NAME: usize = 256;
+    const MAX_ALTITUDE: usize = 64;
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct RawObjectCallbackInfo {
+        module_name: [u8; MAX_MODULE_NAME],
+        altitude: [u8; MAX_ALTITUDE],
+        pre_operation_callback: u64,
+        post_operation_callback: u64,
+        object_type: u8,
+        _padding: [u8; 3],
+        operations: u32,
+        index: u32,
+    }
+
+    #[repr(C)]
+    struct RawResponse {
+        count: u32,
+        entries: [RawObjectCallbackInfo; MAX_ENTRIES],
+    }
+
+    let buffer_size = std::mem::size_of::<RawResponse>();
+    let mut buffer: Vec<u8> = vec![0; buffer_size];
+
+    unsafe {
+        let mut bytes_returned: u32 = 0;
+
+        let result = DeviceIoControl(
+            handle,
+            IOCTL_DIOPROCESS_ENUM_OBJECT_CALLBACKS,
+            None,
+            0,
+            Some(buffer.as_mut_ptr() as *mut _),
+            buffer_size as u32,
+            Some(&mut bytes_returned),
+            None,
+        );
+
+        let _ = CloseHandle(handle);
+
+        if result.is_err() {
+            let err = GetLastError();
+            return Err(CallbackError::IoctlFailed(err.0));
+        }
+
+        let response = &*(buffer.as_ptr() as *const RawResponse);
+        let count = response.count as usize;
+
+        let mut callbacks = Vec::with_capacity(count);
+        for i in 0..count.min(MAX_ENTRIES) {
+            let raw = &response.entries[i];
+
+            // Skip entries with no callbacks
+            if raw.pre_operation_callback == 0 && raw.post_operation_callback == 0 {
+                continue;
+            }
+
+            let module_name_len = raw
+                .module_name
+                .iter()
+                .position(|&b| b == 0)
+                .unwrap_or(MAX_MODULE_NAME);
+            let module_name =
+                String::from_utf8_lossy(&raw.module_name[..module_name_len]).to_string();
+
+            let altitude_len = raw
+                .altitude
+                .iter()
+                .position(|&b| b == 0)
+                .unwrap_or(MAX_ALTITUDE);
+            let altitude = String::from_utf8_lossy(&raw.altitude[..altitude_len]).to_string();
+
+            let object_type =
+                ObjectCallbackType::from_u8(raw.object_type).unwrap_or(ObjectCallbackType::Process);
+
+            callbacks.push(ObjectCallbackInfo {
+                module_name,
+                altitude,
+                pre_operation_callback: raw.pre_operation_callback,
+                post_operation_callback: raw.post_operation_callback,
+                object_type,
+                operations: ObjectCallbackOperations::from_u32(raw.operations),
+                index: raw.index,
+            });
+        }
+
+        Ok(callbacks)
+    }
+}
+
+// ============== Minifilter Enumeration ==============
+
+const IOCTL_DIOPROCESS_ENUM_MINIFILTERS: u32 = 0x00222044; // CTL_CODE(0x22, 0x811, 0, 0)
+
+/// Callbacks registered by a minifilter for file operations
+#[derive(Debug, Clone, Default)]
+pub struct MinifilterCallbacks {
+    pub pre_create: u64,
+    pub post_create: u64,
+    pub pre_read: u64,
+    pub post_read: u64,
+    pub pre_write: u64,
+    pub post_write: u64,
+    pub pre_set_info: u64,
+    pub post_set_info: u64,
+    pub pre_cleanup: u64,
+    pub post_cleanup: u64,
+}
+
+/// Information about a registered minifilter driver
+#[derive(Debug, Clone)]
+pub struct MinifilterInfo {
+    pub filter_name: String,
+    pub altitude: String,
+    pub filter_address: u64,
+    pub frame_id: u64,
+    pub num_instances: u32,
+    pub flags: u32,
+    pub callbacks: MinifilterCallbacks,
+    pub owner_module: String,
+    pub index: u32,
+}
+
+/// Enumerate registered filesystem minifilter drivers
+/// Returns information about all minifilters registered with the Filter Manager
+pub fn enumerate_minifilters() -> Result<Vec<MinifilterInfo>, CallbackError> {
+    let handle = open_device()?;
+
+    const MAX_ENTRIES: usize = 64;
+    const MAX_FILTER_NAME: usize = 64;
+    const MAX_ALTITUDE: usize = 64;
+    const MAX_MODULE_NAME: usize = 256;
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct RawMinifilterCallbacks {
+        pre_create: u64,
+        post_create: u64,
+        pre_read: u64,
+        post_read: u64,
+        pre_write: u64,
+        post_write: u64,
+        pre_set_info: u64,
+        post_set_info: u64,
+        pre_cleanup: u64,
+        post_cleanup: u64,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct RawMinifilterInfo {
+        filter_name: [u8; MAX_FILTER_NAME],
+        altitude: [u8; MAX_ALTITUDE],
+        filter_address: u64,
+        frame_id: u64,
+        num_instances: u32,
+        flags: u32,
+        callbacks: RawMinifilterCallbacks,
+        owner_module: [u8; MAX_MODULE_NAME],
+        index: u32,
+    }
+
+    #[repr(C)]
+    struct RawResponse {
+        count: u32,
+        entries: [RawMinifilterInfo; MAX_ENTRIES],
+    }
+
+    let buffer_size = std::mem::size_of::<RawResponse>();
+    let mut buffer: Vec<u8> = vec![0; buffer_size];
+
+    unsafe {
+        let mut bytes_returned: u32 = 0;
+
+        let result = DeviceIoControl(
+            handle,
+            IOCTL_DIOPROCESS_ENUM_MINIFILTERS,
+            None,
+            0,
+            Some(buffer.as_mut_ptr() as *mut _),
+            buffer_size as u32,
+            Some(&mut bytes_returned),
+            None,
+        );
+
+        let _ = CloseHandle(handle);
+
+        if result.is_err() {
+            let err = GetLastError();
+            return Err(CallbackError::IoctlFailed(err.0));
+        }
+
+        let response = &*(buffer.as_ptr() as *const RawResponse);
+        let count = response.count as usize;
+
+        let mut filters = Vec::with_capacity(count);
+        for i in 0..count.min(MAX_ENTRIES) {
+            let raw = &response.entries[i];
+
+            // Skip empty entries
+            if raw.filter_address == 0 {
+                continue;
+            }
+
+            let filter_name_len = raw
+                .filter_name
+                .iter()
+                .position(|&b| b == 0)
+                .unwrap_or(MAX_FILTER_NAME);
+            let filter_name =
+                String::from_utf8_lossy(&raw.filter_name[..filter_name_len]).to_string();
+
+            let altitude_len = raw
+                .altitude
+                .iter()
+                .position(|&b| b == 0)
+                .unwrap_or(MAX_ALTITUDE);
+            let altitude = String::from_utf8_lossy(&raw.altitude[..altitude_len]).to_string();
+
+            let owner_len = raw
+                .owner_module
+                .iter()
+                .position(|&b| b == 0)
+                .unwrap_or(MAX_MODULE_NAME);
+            let owner_module =
+                String::from_utf8_lossy(&raw.owner_module[..owner_len]).to_string();
+
+            filters.push(MinifilterInfo {
+                filter_name,
+                altitude,
+                filter_address: raw.filter_address,
+                frame_id: raw.frame_id,
+                num_instances: raw.num_instances,
+                flags: raw.flags,
+                callbacks: MinifilterCallbacks {
+                    pre_create: raw.callbacks.pre_create,
+                    post_create: raw.callbacks.post_create,
+                    pre_read: raw.callbacks.pre_read,
+                    post_read: raw.callbacks.post_read,
+                    pre_write: raw.callbacks.pre_write,
+                    post_write: raw.callbacks.post_write,
+                    pre_set_info: raw.callbacks.pre_set_info,
+                    post_set_info: raw.callbacks.post_set_info,
+                    pre_cleanup: raw.callbacks.pre_cleanup,
+                    post_cleanup: raw.callbacks.post_cleanup,
+                },
+                owner_module,
+                index: raw.index,
+            });
+        }
+
+        Ok(filters)
+    }
+}
+
+// ============== Kernel Driver Enumeration ==============
+
+const IOCTL_DIOPROCESS_ENUM_DRIVERS: u32 = 0x0022204C; // CTL_CODE(0x22, 0x813, 0, 0)
+
+/// Information about a loaded kernel driver
+#[derive(Debug, Clone)]
+pub struct KernelDriverInfo {
+    pub base_address: u64,
+    pub size: u64,
+    pub entry_point: u64,
+    pub driver_object: u64,
+    pub flags: u32,
+    pub load_count: u16,
+    pub driver_name: String,
+    pub driver_path: String,
+    pub index: u32,
+}
+
+/// Enumerate loaded kernel drivers from PsLoadedModuleList
+/// Returns information about all kernel-mode drivers currently loaded
+pub fn enumerate_kernel_drivers() -> Result<Vec<KernelDriverInfo>, CallbackError> {
+    let handle = open_device()?;
+
+    const MAX_ENTRIES: usize = 512;
+    const MAX_DRIVER_NAME: usize = 64;
+    const MAX_DRIVER_PATH: usize = 260;
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct RawKernelDriverInfo {
+        base_address: u64,
+        size: u64,
+        entry_point: u64,
+        driver_object: u64,
+        flags: u32,
+        load_count: u32, // Actually u16 + padding
+        driver_name: [u8; MAX_DRIVER_NAME],
+        driver_path: [u16; MAX_DRIVER_PATH], // Wide string
+        index: u32,
+    }
+
+    #[repr(C)]
+    struct RawResponse {
+        count: u32,
+        entries: [RawKernelDriverInfo; MAX_ENTRIES],
+    }
+
+    let buffer_size = std::mem::size_of::<RawResponse>();
+    let mut buffer: Vec<u8> = vec![0; buffer_size];
+
+    unsafe {
+        let mut bytes_returned: u32 = 0;
+
+        let result = DeviceIoControl(
+            handle,
+            IOCTL_DIOPROCESS_ENUM_DRIVERS,
+            None,
+            0,
+            Some(buffer.as_mut_ptr() as *mut _),
+            buffer_size as u32,
+            Some(&mut bytes_returned),
+            None,
+        );
+
+        let _ = CloseHandle(handle);
+
+        if result.is_err() {
+            let err = GetLastError();
+            return Err(CallbackError::IoctlFailed(err.0));
+        }
+
+        let response = &*(buffer.as_ptr() as *const RawResponse);
+        let count = response.count as usize;
+
+        let mut drivers = Vec::with_capacity(count);
+        for i in 0..count.min(MAX_ENTRIES) {
+            let raw = &response.entries[i];
+
+            // Skip empty entries
+            if raw.base_address == 0 {
+                continue;
+            }
+
+            // Parse ANSI driver name
+            let name_len = raw
+                .driver_name
+                .iter()
+                .position(|&b| b == 0)
+                .unwrap_or(MAX_DRIVER_NAME);
+            let driver_name =
+                String::from_utf8_lossy(&raw.driver_name[..name_len]).to_string();
+
+            // Parse wide driver path
+            let path_len = raw
+                .driver_path
+                .iter()
+                .position(|&c| c == 0)
+                .unwrap_or(MAX_DRIVER_PATH);
+            let driver_path = String::from_utf16_lossy(&raw.driver_path[..path_len]);
+
+            drivers.push(KernelDriverInfo {
+                base_address: raw.base_address,
+                size: raw.size,
+                entry_point: raw.entry_point,
+                driver_object: raw.driver_object,
+                flags: raw.flags,
+                load_count: (raw.load_count & 0xFFFF) as u16,
+                driver_name,
+                driver_path,
+                index: raw.index,
+            });
+        }
+
+        Ok(drivers)
     }
 }

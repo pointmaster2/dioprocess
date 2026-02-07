@@ -13,3 +13,7 @@ misc = { path = "../misc" }
 callback = { path = "../callback" }
 arboard = "3"
 rfd = "0.15"
+rusqlite = { version = "0.31", features = ["bundled"] }
+parking_lot = "0.12"
+ureq = "2"
+zip = "2"

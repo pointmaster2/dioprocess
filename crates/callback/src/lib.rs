@@ -10,13 +10,19 @@
 
 mod driver;
 mod error;
+mod pspcidtable;
 pub mod storage;
 mod types;
 
 pub use driver::{
-    get_collection_state, is_driver_loaded, read_events, register_callbacks, start_collection,
-    stop_collection, unregister_callbacks,
+    clear_debug_flags, enable_all_privileges, enumerate_image_callbacks, enumerate_kernel_drivers,
+    enumerate_minifilters, enumerate_object_callbacks, enumerate_process_callbacks,
+    enumerate_thread_callbacks, get_collection_state, is_driver_loaded, protect_process,
+    read_events, register_callbacks, start_collection, stop_collection, unprotect_process,
+    unregister_callbacks, CallbackInfo, KernelDriverInfo, MinifilterCallbacks, MinifilterInfo,
+    ObjectCallbackInfo, ObjectCallbackOperations, ObjectCallbackType,
 };
 pub use error::CallbackError;
+pub use pspcidtable::{enumerate_pspcidtable, CidEntry, CidObjectType};
 pub use storage::{EventFilter, EventStorage};
 pub use types::{CallbackEvent, CollectionState, EventCategory, EventType, RegistryOperation};

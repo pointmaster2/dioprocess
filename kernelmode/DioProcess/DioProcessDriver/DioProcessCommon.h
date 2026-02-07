@@ -144,8 +144,229 @@ struct EventData
 #define IOCTL_DIOPROCESS_UNREGISTER_CALLBACKS \
 	CTL_CODE(FILE_DEVICE_UNKNOWN, 0x804, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
+// Security research IOCTLs (from RedOctober)
+#define IOCTL_DIOPROCESS_PROTECT_PROCESS \
+	CTL_CODE(FILE_DEVICE_UNKNOWN, 0x805, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_DIOPROCESS_UNPROTECT_PROCESS \
+	CTL_CODE(FILE_DEVICE_UNKNOWN, 0x806, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_DIOPROCESS_ENABLE_PRIVILEGES \
+	CTL_CODE(FILE_DEVICE_UNKNOWN, 0x807, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_DIOPROCESS_CLEAR_DEBUG_FLAGS \
+	CTL_CODE(FILE_DEVICE_UNKNOWN, 0x808, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+// Callback enumeration IOCTLs
+#define IOCTL_DIOPROCESS_ENUM_PROCESS_CALLBACKS \
+	CTL_CODE(FILE_DEVICE_UNKNOWN, 0x809, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_DIOPROCESS_ENUM_THREAD_CALLBACKS \
+	CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80A, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_DIOPROCESS_ENUM_IMAGE_CALLBACKS \
+	CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80B, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+// Kernel injection IOCTLs
+#define IOCTL_DIOPROCESS_KERNEL_INJECT_SHELLCODE \
+	CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80C, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_DIOPROCESS_KERNEL_INJECT_DLL \
+	CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80D, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+// PspCidTable enumeration IOCTL
+#define IOCTL_DIOPROCESS_ENUM_PSPCIDTABLE \
+	CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80F, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+// Object callback enumeration IOCTL
+#define IOCTL_DIOPROCESS_ENUM_OBJECT_CALLBACKS \
+	CTL_CODE(FILE_DEVICE_UNKNOWN, 0x810, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+// Minifilter enumeration IOCTL
+#define IOCTL_DIOPROCESS_ENUM_MINIFILTERS \
+	CTL_CODE(FILE_DEVICE_UNKNOWN, 0x811, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
 struct CollectionStateResponse
 {
 	BOOLEAN IsCollecting;
 	ULONG ItemCount;
+};
+
+// ============== Process Security Structures ==============
+
+struct TargetProcessRequest
+{
+	ULONG ProcessId;
+};
+
+// ============== Kernel Injection Structures ==============
+
+struct KernelInjectShellcodeRequest
+{
+	ULONG TargetProcessId;
+	ULONG ShellcodeSize;
+	UCHAR Shellcode[1];  // Variable length
+};
+
+struct KernelInjectShellcodeResponse
+{
+	ULONG64 AllocatedAddress;  // Where shellcode was written
+	BOOLEAN Success;
+};
+
+#define MAX_DLL_PATH_LENGTH 520
+
+struct KernelInjectDllRequest
+{
+	ULONG TargetProcessId;
+	WCHAR DllPath[MAX_DLL_PATH_LENGTH];
+};
+
+struct KernelInjectDllResponse
+{
+	ULONG64 AllocatedAddress;  // Where DLL path was written
+	ULONG64 LoadLibraryAddress;  // Address of LoadLibraryW
+	BOOLEAN Success;
+};
+
+// ============== PspCidTable Enumeration Structures ==============
+
+#define MAX_CID_ENTRIES 2048  // Maximum entries to return
+#define MAX_PROCESS_NAME_LENGTH 16  // ImageFileName is 15 chars + null terminator
+
+enum CidObjectType : UCHAR
+{
+	CidProcess = 1,
+	CidThread = 2
+};
+
+struct CidEntry
+{
+	ULONG Id;              // PID or TID
+	ULONG64 ObjectAddress; // EPROCESS or ETHREAD address
+	CidObjectType Type;    // Process or Thread
+	ULONG ParentPid;       // Parent PID (for processes) or owning process PID (for threads)
+	CHAR ProcessName[MAX_PROCESS_NAME_LENGTH];  // Process name (from EPROCESS.ImageFileName)
+};
+
+struct EnumCidTableResponse
+{
+	ULONG Count;           // Number of entries returned
+	CidEntry Entries[1];   // Variable length array
+};
+
+// ============== Callback Enumeration Structures ==============
+
+#define MAX_CALLBACK_ENTRIES 64
+#define MAX_MODULE_NAME_LENGTH 256
+
+struct CallbackInformation
+{
+	CHAR ModuleName[MAX_MODULE_NAME_LENGTH];
+	ULONG64 CallbackAddress;
+	ULONG Index;  // Position in the callback array
+};
+
+// ============== Object Callback Enumeration Structures ==============
+
+#define MAX_OBJECT_CALLBACK_ENTRIES 64
+#define MAX_ALTITUDE_LENGTH 64
+
+// Object type being monitored by the callback
+enum ObjectCallbackType : UCHAR
+{
+	ObjectCallbackProcess = 1,
+	ObjectCallbackThread = 2
+};
+
+// Operations the callback monitors
+enum ObjectCallbackOperations : ULONG
+{
+	OpHandleCreate = 1,      // OB_OPERATION_HANDLE_CREATE
+	OpHandleDuplicate = 2    // OB_OPERATION_HANDLE_DUPLICATE
+};
+
+struct ObjectCallbackInfo
+{
+	CHAR ModuleName[MAX_MODULE_NAME_LENGTH];      // Driver that registered the callback
+	CHAR Altitude[MAX_ALTITUDE_LENGTH];           // Callback altitude (priority)
+	ULONG64 PreOperationCallback;                 // Pre-operation callback address
+	ULONG64 PostOperationCallback;                // Post-operation callback address
+	ObjectCallbackType ObjectType;                // Process or Thread
+	ObjectCallbackOperations Operations;          // Which operations are monitored
+	ULONG Index;                                  // Entry index
+};
+
+struct EnumObjectCallbacksResponse
+{
+	ULONG Count;                                  // Number of entries returned
+	ObjectCallbackInfo Entries[1];                // Variable length array
+};
+
+// ============== Minifilter Enumeration Structures ==============
+
+#define MAX_MINIFILTER_ENTRIES 64
+#define MAX_FILTER_NAME_LENGTH 64
+
+// IRP major function codes we care about for minifilter callbacks
+#define IRP_MJ_CREATE_INDEX          0   // IRP_MJ_CREATE
+#define IRP_MJ_READ_INDEX            3   // IRP_MJ_READ
+#define IRP_MJ_WRITE_INDEX           4   // IRP_MJ_WRITE
+#define IRP_MJ_SET_INFORMATION_INDEX 6   // IRP_MJ_SET_INFORMATION (delete, rename)
+#define IRP_MJ_CLEANUP_INDEX         18  // IRP_MJ_CLEANUP
+
+struct MinifilterCallbacks
+{
+	ULONG64 PreCreate;
+	ULONG64 PostCreate;
+	ULONG64 PreRead;
+	ULONG64 PostRead;
+	ULONG64 PreWrite;
+	ULONG64 PostWrite;
+	ULONG64 PreSetInfo;
+	ULONG64 PostSetInfo;
+	ULONG64 PreCleanup;
+	ULONG64 PostCleanup;
+};
+
+struct MinifilterInfo
+{
+	CHAR FilterName[MAX_FILTER_NAME_LENGTH];      // Filter driver name
+	CHAR Altitude[MAX_ALTITUDE_LENGTH];           // Filter altitude (load order priority)
+	ULONG64 FilterAddress;                        // Address of FLT_FILTER structure
+	ULONG64 FrameId;                              // Filter frame ID
+	ULONG NumberOfInstances;                      // Number of active instances
+	ULONG Flags;                                  // Filter flags
+	MinifilterCallbacks Callbacks;                // Pre/Post callbacks for key operations
+	CHAR OwnerModuleName[MAX_MODULE_NAME_LENGTH]; // Module that owns this filter
+	ULONG Index;                                  // Entry index
+};
+
+struct EnumMinifiltersResponse
+{
+	ULONG Count;                                  // Number of entries returned
+	MinifilterInfo Entries[1];                    // Variable length array
+};
+
+// ============== Kernel Driver Enumeration ==============
+
+// Driver enumeration IOCTL
+#define IOCTL_DIOPROCESS_ENUM_DRIVERS \
+	CTL_CODE(FILE_DEVICE_UNKNOWN, 0x813, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+#define MAX_DRIVER_ENTRIES 512
+#define MAX_DRIVER_NAME_LENGTH 64
+#define MAX_DRIVER_PATH_LENGTH 260
+
+struct KernelDriverInfo
+{
+	ULONG64 BaseAddress;                          // Driver base address in kernel
+	ULONG64 Size;                                 // Driver size in bytes
+	ULONG64 EntryPoint;                           // Driver entry point
+	ULONG64 DriverObject;                         // Pointer to DRIVER_OBJECT (if available)
+	ULONG Flags;                                  // Driver flags
+	ULONG LoadCount;                              // Reference/load count
+	CHAR DriverName[MAX_DRIVER_NAME_LENGTH];      // Driver name (e.g., "ntoskrnl.exe")
+	WCHAR DriverPath[MAX_DRIVER_PATH_LENGTH];     // Full driver path
+	ULONG Index;                                  // Entry index
+};
+
+struct EnumDriversResponse
+{
+	ULONG Count;                                  // Number of entries returned
+	KernelDriverInfo Entries[1];                  // Variable length array
 };

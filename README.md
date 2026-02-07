@@ -26,8 +26,16 @@ Built with **Rust 2021** + **Dioxus 0.6** (desktop renderer)
   - Handle operations (process/thread handle create & duplicate)
   - Registry operations (create, open, set, delete, rename, query)
   - **SQLite persistence** with 24-hour retention and paginated UI
+- **Security Research Features (Kernel Driver)** — Direct kernel structure manipulation for process protection and privilege escalation:
+  - **Process Protection** — Apply/remove PPL (Protected Process Light) protection via `_EPROCESS` modification
+  - **Token Privilege Escalation** — Enable all 40 Windows privileges via `_TOKEN` modification
+  - **Clear Debug Flags** — Remove debugger indicators (DebugPort, PEB.BeingDebugged, NtGlobalFlag)
+  - **Callback Enumeration** — List registered process/thread/image kernel callbacks (identify EDR/AV hooks)
+  - **PspCidTable Enumeration** — Enumerate all processes/threads via kernel CID table (detect hidden processes)
+  - Supports Windows 10 (1507-22H2) and Windows 11 (21H2-24H2)
 - **7 DLL injection techniques** — from classic LoadLibrary to function stomping & full manual mapping
 - **Shellcode injection** — classic (from .bin file), web staging (download from URL via WinInet), and threadless (hook exported function, no new threads)
+- **Kernel injection** (requires driver) — shellcode & DLL injection from kernel mode via `RtlCreateUserThread`, bypasses usermode hooks
 - **DLL Unhooking** — restore hooked DLLs (ntdll, kernel32, kernelbase, user32, advapi32, ws2_32) by replacing .text section from disk
 - **Hook Detection & Unhooking** — scan IAT entries for inline hooks (E9 JMP, E8 CALL, EB short JMP, FF25 indirect JMP, MOV+JMP x64 patterns), compare with disk, and optionally unhook detected hooks
 - **Process String Scanning** — extract ASCII and UTF-16 strings from process memory with configurable min length, encoding filter, paginated results (1000/page), and text export
@@ -49,13 +57,14 @@ crates/
 ├── process/       # ToolHelp32, NtQueryInformationThread, VirtualQueryEx, modules, memory regions, string scanning
 ├── network/       # GetExtendedTcpTable / GetUdpTable → PID mapping
 ├── service/       # SCM: EnumServicesStatusEx, Start/Stop/Create/Delete service
-├── callback/      # Kernel driver communication + SQLite event storage
+├── callback/      # Kernel driver communication + SQLite event storage + security research IOCTLs
 │   └── src/
-│       ├── lib.rs     # Module re-exports
-│       ├── driver.rs  # ReadFile from \\.\DioProcess device
-│       ├── storage.rs # SQLite persistence (WAL mode, batched writes)
-│       ├── types.rs   # CallbackEvent, EventType, EventCategory
-│       └── error.rs   # CallbackError enum
+│       ├── lib.rs         # Module re-exports
+│       ├── driver.rs      # IOCTLs (protection, privileges, debug flags, callback enumeration)
+│       ├── pspcidtable.rs # PspCidTable enumeration via signature scanning
+│       ├── storage.rs     # SQLite persistence (WAL mode, batched writes)
+│       ├── types.rs       # CallbackEvent, EventType, EventCategory
+│       └── error.rs       # CallbackError enum
 ├── misc/          # DLL injection (7 methods), process hollowing, ghosting, token theft, hook scanning, NT syscalls
 │   └── src/
 │       ├── lib.rs              # Module declarations + pub use re-exports
@@ -71,10 +80,11 @@ crates/
 ├── ui/            # Dioxus components, router, global signals, dark theme
 └── dioprocess/    # Binary crate — entry point, custom window, manifest embedding
 kernelmode/
-└── DioProcess/        # WDM kernel driver (C++) for system event monitoring
+└── DioProcess/        # WDM kernel driver (C++) for system event monitoring + security research
     ├── DioProcessDriver/
     │   ├── DioProcessDriver.cpp    # Driver code (device: \\.\DioProcess)
-    │   └── DioProcessCommon.h      # Shared event structures
+    │   ├── DioProcessDriver.h      # Protection structures, Windows version detection
+    │   └── DioProcessCommon.h      # Shared event structures + security IOCTLs
     └── DioProcessCli/              # Test CLI client
 ```
 
@@ -97,6 +107,58 @@ kernelmode/
 3. **Threadless** — Hook an exported function (e.g. `USER32!MessageBoxW`) with a CALL trampoline → payload fires when the function is naturally called by the target process (no `CreateRemoteThread`). Self-healing hook restores original bytes after execution.
 
 Access via context menu: **Miscellaneous → Shellcode Injection → Classic**, **Web Staging**, or **Threadless**
+
+### Kernel Injection (requires driver)
+
+Located in `crates/misc/src/kernel_inject.rs` + `kernelmode/DioProcess/DioProcessDriver/DioProcessDriver.cpp`:
+
+1. **Kernel Shellcode Injection** — Allocate RWX memory in target process, write shellcode, create thread via `RtlCreateUserThread` from kernel mode (bypasses usermode hooks)
+2. **Kernel DLL Injection** — Allocate memory for DLL path, resolve `LoadLibraryW` address in target process via PEB walking + PE export parsing, create thread with `RtlCreateUserThread(LoadLibraryW, dll_path)`
+
+**Implementation:**
+- Uses undocumented `RtlCreateUserThread` kernel API (resolved dynamically via `MmGetSystemRoutineAddress`)
+- Attaches to target process context via `KeStackAttachProcess`
+- Allocates memory via `ZwAllocateVirtualMemory`, writes data via `RtlCopyMemory`
+- For DLL injection: walks PEB→Ldr→InLoadOrderModuleList to find `kernel32.dll`, parses PE exports to find `LoadLibraryW`
+- Version-aware PEB access using `PROCESS_PEB_OFFSET[]` table (supports Windows 10 1507+ and Windows 11)
+- Returns `STATUS_NOT_SUPPORTED` for unsupported Windows versions
+
+**Access:** Right-click process → **Miscellaneous → Kernel Injection** → Shellcode Injection or DLL Injection (grayed out when driver not loaded)
+
+### Kernel Callback Enumeration
+
+Enumerate registered kernel callbacks via the **Kernel Utilities** tab → **Callback Enumeration**:
+
+- **Process callbacks** — `PsSetCreateProcessNotifyRoutineEx` registrations (AV/EDR process monitoring)
+- **Thread callbacks** — `PsSetCreateThreadNotifyRoutine` registrations
+- **Image load callbacks** — `PsSetLoadImageNotifyRoutine` registrations (DLL/EXE load monitoring)
+- **Object callbacks** — `ObRegisterCallbacks` registrations (handle operation monitoring for process/thread handles)
+  - Shows pre-operation and post-operation callback addresses
+  - Displays callback altitude (priority) and monitored operations (Create/Duplicate)
+  - Commonly used by EDR/AV to monitor handle access to protected processes
+- Returns callback address, slot index, and owning driver module name
+- Useful for identifying EDR hooks, rootkit callbacks, security product registrations
+- Located in `crates/callback/src/driver.rs`: `enumerate_process_callbacks()`, `enumerate_thread_callbacks()`, `enumerate_image_callbacks()`, `enumerate_object_callbacks()`
+
+### PspCidTable Enumeration
+
+Enumerate all processes and threads via the kernel's CID handle table via **Kernel Utilities** tab → **PspCidTable**:
+
+- Lists all PIDs/TIDs with their EPROCESS/ETHREAD kernel addresses
+- Uses **signature scanning** (no hardcoded offsets) to locate `PspCidTable`
+- Can detect hidden processes (DKOM) by comparing with usermode enumeration
+- Read-only operation — PatchGuard/KPP safe
+- Located in `crates/callback/src/pspcidtable.rs`: `enumerate_pspcidtable()` → `Vec<CidEntry>`
+
+### Clear Debug Flags (Anti-Anti-Debugging)
+
+Remove debugger presence indicators from a process via right-click → **Miscellaneous → Clear Debug Flags**:
+
+- Zeros `EPROCESS.DebugPort` — bypasses `NtQueryInformationProcess(ProcessDebugPort)`
+- Zeros `PEB.BeingDebugged` — bypasses `IsDebuggerPresent()`
+- Zeros `PEB.NtGlobalFlag` — bypasses heap-based debug checks (FLG_HEAP_* flags)
+- Requires kernel driver for direct structure access
+- Located in `crates/callback/src/driver.rs`: `clear_debug_flags(pid)`
 
 ### Process Creation & Stealth
 
@@ -137,6 +199,34 @@ Scan process IAT (Import Address Table) for inline hooks by comparing imported f
 ### Token Theft
 
 `OpenProcessToken → DuplicateTokenEx(TokenPrimary) → SeAssignPrimaryTokenPrivilege → ImpersonateLoggedOnUser → CreateProcessAsUserW → RevertToSelf`
+
+### Security Research Features (Kernel Driver Required)
+
+**Process Protection Manipulation** — Apply or remove Protected Process Light (PPL) protection via direct `_EPROCESS` structure modification:
+- **🛡️ Protect Process** — Set PPL WinTcb-Light protection (SignatureLevel=0x3E, SectionSignatureLevel=0x3C, Type=2, Signer=6)
+- **🔓 Unprotect Process** — Zero out all protection fields (SignatureLevel, SectionSignatureLevel, Type, Signer)
+- Can protect unprotected processes or unprotect protected processes (lsass.exe, AV, etc.)
+- Bypasses normal process protection mechanisms for security research
+
+**Token Privilege Escalation** — Enable all Windows privileges for a process token:
+- **⚡ Enable All Privileges** — Set all privilege bitmasks to 0xFF in `_TOKEN.Privileges`
+- Grants all 40 Windows privileges including:
+  - `SeDebugPrivilege` — Debug any process
+  - `SeLoadDriverPrivilege` — Load kernel drivers
+  - `SeTcbPrivilege` — Act as part of the operating system
+  - `SeBackupPrivilege`, `SeRestorePrivilege`, `SeImpersonatePrivilege`, etc.
+- Direct `_TOKEN` structure manipulation bypasses `AdjustTokenPrivileges` restrictions
+
+**Implementation Details:**
+- Requires DioProcess kernel driver to be loaded and running
+- UI features automatically disabled when driver not loaded (grayed out in context menu)
+- Supports Windows 10 (1507-22H2) and Windows 11 (21H2-24H2)
+- Uses version-specific structure offsets (auto-detected via `RtlGetVersion`)
+- Data-only modifications — **does not trigger PatchGuard/KPP**
+- Located in: `kernelmode/DioProcess/DioProcessDriver/` (driver) and `crates/callback/src/driver.rs` (Rust bindings)
+- Access via: Right-click process → **Miscellaneous** → Protect/Unprotect/Enable Privileges
+
+**Offset Verification:** See `tools/verify_offsets.md` for testing and updating structure offsets for your Windows version
 
 ### Utilities
 
@@ -180,7 +270,7 @@ Real-time kernel event capture via WDM driver with 17 event types:
 | Handle | ProcessHandleCreate, ProcessHandleDuplicate, ThreadHandleCreate, ThreadHandleDuplicate |
 | Registry | RegistryCreate, RegistryOpen, RegistrySetValue, RegistryDeleteKey, RegistryDeleteValue, RegistryRenameKey, RegistryQueryValue |
 
-**Storage:** SQLite database at `%LOCALAPPDATA%\DioProcess\events.db`
+**Storage:** SQLite database at `%LOCALAPPDATA%\DioProcess\events.db` (separate from app config at `config.db`)
 - WAL mode for concurrent reads/writes
 - Batched inserts (500 events or 100ms flush)
 - 24-hour auto-retention cleanup
@@ -188,10 +278,29 @@ Real-time kernel event capture via WDM driver with 17 event types:
 
 **Driver:** Build with Visual Studio + WDK, load via `sc create DioProcess type= kernel binPath= "path\to\DioProcess.sys" && sc start DioProcess`
 
+### Driver Installation Requirements
+
+⚠️ **Before installing the kernel driver, you MUST:**
+
+1. **Disable Hyper-V:** `bcdedit /set hypervisorlaunchtype off` (reboot required)
+2. **Disable Secure Boot** in BIOS/UEFI settings
+3. **Disable Windows driver protections:**
+   - Disable Driver Signature Enforcement (test mode or boot options)
+   - Disable Vulnerable Driver Blocklist (Windows Security → Device Security → Core Isolation)
+   - Disable Memory Integrity / HVCI if enabled
+
+⚠️ **Use ONLY on test systems. You are responsible for any damage.**
+
+**Install Log:** Driver installation output is logged to `%LOCALAPPDATA%\DioProcess\install.log` for troubleshooting.
+
 ## UI & Interaction Highlights
 
-- Borderless dark-themed window with custom title bar
-- Tabs: **Processes** · **Network** · **Services** · **Utilities** · **System Events**
+- Borderless window with custom title bar
+- **Theme System** — Two themes selectable from title bar dropdown:
+  - **Aura Glow** (default) — Dark background with purple/violet accents and glowing white text
+  - **Cyber** — Original cyan/teal accent theme
+  - Theme preference persisted in SQLite (`%LOCALAPPDATA%\DioProcess\config.db`)
+- Tabs: **Processes** · **Network** · **Services** · **Usermode Utilities** · **Kernel Utilities** · **System Events**
 - **Tree view** in Processes tab (DFS traversal, box-drawing connectors ├ │ └ ─, ancestor-inclusive search)
 - Modal inspectors: Threads · Handles · Modules · Memory · Performance graphs · String Scan
 - Real-time per-process CPU/memory graphs (60-second rolling history, SVG + fill)
