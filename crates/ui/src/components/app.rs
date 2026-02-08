@@ -112,7 +112,7 @@ pub fn Layout() -> Element {
     Built with Rust • Dioxus 0.6 • Native Windows APIs
     Requires administrator privileges
 
-    Version: {}
+    Version: {} (LATEST PUBLIC VERSION)
     "#,
         version
     );
@@ -126,7 +126,7 @@ pub fn Layout() -> Element {
                 div { class: "title-bar",
                     div {
                         class: "title-bar-drag",
-                        span { class: "title-text", "DioProcess | Windows System Monitor Tool v{version}" }
+                        span { class: "title-text", "DioProcess | Windows System Monitor Tool PUBLIC BUILD version" }
                     }
                     // Theme selector
                     div { class: "theme-selector",
